@@ -600,11 +600,80 @@ After writing any module, explicitly check for these before committing:
 >   - Exception attributes: `status_code`, `retry_after` on all typed exceptions
 > - **Full suite result: 165 passed, 12 skipped — Coverage: 86.49% (gate: 80%) ✓**
 
+> **Session 6 notes (2026-03-08) — Phase 2, Prompt 2.3 (Bootstrap Engine):**
+> - `src/ingestion/bootstrap.py` created — `BootstrapEngine`:
+>   - `BootstrapResult(frozen=True)`: symbol, interval, rows_fetched, rows_total, gaps_found,
+>     duration_seconds, start_ms, end_ms, era_context_rows, era_training_rows
+>   - `Checkpoint`: symbol, interval, last_open_time, rows_saved, started_at, updated_at
+>   - `bootstrap_symbol()`: while-loop with cursor advance via `last_close_time + 1`;
+>     breaks early if `n < batch_size` (final page); atomic checkpoint saves every N rows
+>   - `_assign_era()`: `open_time >= 1_640_995_200_000` → `'training'`, else `'context'`
+>   - `_count_gaps()`: counts consecutive pairs where `b − a > interval_ms`
+>   - Checkpoint saved atomically via `.tmp` + `Path.replace()`; deleted on clean completion
+>   - Resume: `resume_start = cp.last_open_time + interval_ms` (no double-fetch, no skip)
+>   - Soft row-count sanity check via `compute_expected_row_count()` — warning only, no raise
+>   - All exceptions re-raised unchanged after loguru error logging
+> - `src/ingestion/multi_symbol.py` created — `MultiSymbolBootstrapper`:
+>   - `run(symbols, intervals, start_ms, end_ms)` → `BootstrapReport` (dict keyed `sym/interval`)
+>   - Phase A: `ThreadPoolExecutor(max_workers=2)` for DOGEUSDT + BTCUSDT concurrently
+>   - Phase B: sequential DOGEBTC and any other symbols
+>   - Each thread gets a fresh `BinanceRESTClient` via `make_client()` factory callable
+>   - `DogeStorage` is shared; filelock in storage ensures write-safety
+>   - `print_summary(report)` outputs formatted loguru table
+> - `scripts/bootstrap_doge.py` updated — CLI entry point:
+>   - `argparse`: `--symbols` (default: DOGEUSDT BTCUSDT DOGEBTC), `--intervals` (default: 1h),
+>     `--start` (default: context_start_date from config YAML), `--end` (default: now UTC),
+>     `--checkpoint-every` (default: 5 000), `--dry-run`
+>   - `_parse_date_to_ms(date_str)` converts `YYYY-MM-DD` → UTC epoch ms
+>   - Returns exit code 0 (success) or 1 (any failure)
+> - `tests/unit/test_bootstrap.py` created — 18 tests, all passing:
+>   - `_make_ohlcv_df()` helper includes `close_time` (required by bootstrap cursor logic)
+>   - `sqlite_storage` fixture: in-memory SQLite, `create_tables()`, lock in `tmp_path`
+>   - `mock_client` fixture: `MagicMock(spec=BinanceRESTClient)` with `weight_used=10`
+>   - `engine_factory` fixture: closure over `tmp_path/checkpoints`
+>   - 3 000-row full bootstrap (3 batches × 1 000), checkpoint deletion, resume from checkpoint,
+>     era context/training/boundary, `_assign_era` boundary inclusive on training, all 5 gap
+>     detection variants, gaps reported in result, era counts sum check
+> - Key design decisions:
+>   - cursor advances via `last_close_time + 1` (not `open_time + interval`): matches Binance
+>     pagination semantics exactly and avoids off-by-one gaps
+>   - `is_interpolated` column set to `False` on every bootstrap batch before upsert
+>   - `multi_symbol.py` uses a `make_client` factory (not a shared client) so each thread
+>     has independent weight counter and session
+> - **Full suite result: 183 passed, 12 skipped — Coverage: 80.67% (gate: 80%) ✓**
+>
+> **HANDOVER — Next session: Phase 2, Prompt 2.4 — `BinanceFuturesClient`**
+> - File to create: `src/ingestion/futures_client.py`
+> - Purpose: fetch historical and live funding rate data from Binance USD-M Futures REST API
+> - Endpoint: `GET /fapi/v1/fundingRate?symbol=DOGEUSDT&limit=1000&startTime={ms}&endTime={ms}`
+> - Rate limit bucket: **Futures** (2 400 weight/minute) — separate from Spot (1 200/min)
+>   Use `X-MBX-USED-WEIGHT-1M` from the **fapi** base URL (`https://fapi.binance.com`)
+> - Key differences from `BinanceRESTClient`:
+>   - Base URL: `https://fapi.binance.com` (not `https://api.binance.com`)
+>   - Weight threshold: 2 400/min (configurable, default 1 800 to leave headroom)
+>   - Funding rates come at 8-hour intervals (00:00, 08:00, 16:00 UTC)
+>   - Response schema: `[{"symbol":..., "fundingTime":..., "fundingRate":...}, ...]`
+> - Class: `BinanceFuturesClient(api_key, api_secret, base_url, weight_threshold, max_retries)`
+>   - `get_funding_rates(symbol, start_ms, end_ms) -> pd.DataFrame`
+>     columns: `funding_time (int), funding_rate (float), symbol (str)`
+>     validated against `FundingRateSchema`; auto-paginates via `startTime` cursor
+> - Reuse `BinanceAPIError`, `BinanceRateLimitError`, `BinanceAuthError`, `DataValidationError`
+>   from `src/ingestion/exceptions.py` — do NOT introduce new exception classes
+> - Test file: `tests/unit/test_futures_client.py` using `responses` library (same as REST client)
+>   Minimum tests: pagination, 429 rate-limit, schema validation failure, empty response,
+>   deduplication, `funding_time` int type, `funding_rate` float range check
+> - After `BinanceFuturesClient`, the session after that should tackle `BinanceWebSocketClient`
+>   (`src/ingestion/ws_client.py`) for live candle streaming
+
 ### Phase 2 — Data Ingestion
 - [x] `BinanceRESTClient` — rate limiting, retry, weight headers
+- [x] `src/ingestion/bootstrap.py` — `BootstrapEngine` with checkpointing (every N rows), atomic JSON saves, era assignment, gap detection, OHLCVSchema validation, full resume-from-checkpoint support; `BootstrapResult` + `Checkpoint` dataclasses
+- [x] `src/ingestion/multi_symbol.py` — `MultiSymbolBootstrapper`; Phase A parallel (DOGEUSDT+BTCUSDT via ThreadPoolExecutor), Phase B sequential (DOGEBTC + others); per-thread fresh client via factory callable; `BootstrapReport` summary dict
+- [x] `scripts/bootstrap_doge.py` — CLI entry point; argparse (--symbols, --intervals, --start, --end, --checkpoint-every, --dry-run); tqdm progress bar; `_parse_date_to_ms()` helper; delegates to `MultiSymbolBootstrapper`
+- [x] `tests/unit/test_bootstrap.py` — 18 tests; all passing (3 000-row full run, checkpoint creation/deletion, resume from checkpoint, era context/training/boundary, gap detection, era counts in result)
 - [ ] `BinanceFuturesClient` — funding rate endpoint
 - [ ] `BinanceWebSocketClient` — reconnection + watchdog
-- [ ] DOGEUSDT 1h bootstrap complete
+- [ ] DOGEUSDT 1h bootstrap complete (data fetched from Binance)
 - [ ] BTCUSDT 1h bootstrap complete
 - [ ] DOGEBTC 1h bootstrap complete
 - [ ] 4h and 1d bootstraps complete
