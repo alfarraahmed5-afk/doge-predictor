@@ -498,6 +498,14 @@ After writing any module, explicitly check for these before committing:
 - [x] Pandera schema contracts written — RawOHLCVSchema, RawFundingRateSchema, ProcessedOHLCVSchema, AlignedSchema, FeatureSchema in src/processing/validator.py
 - [x] Placeholder test files created — 12 unit tests + 1 integration test, all skipped; pytest collects all 12 and reports 12 skipped
 - [x] `src/config.py` created — Pydantic Settings models for all 4 config files; loaded once at startup; global singletons exported
+- [x] `src/processing/schemas.py` created — Pydantic v2 DTOs for all 6 pipeline record types (OHLCVRecord, FundingRateRecord, CandleValidationResult, FeatureRecord, PredictionRecord, RewardResult)
+- [x] `src/processing/df_schemas.py` created — Pandera DataFrame schemas (OHLCVSchema, FeatureSchema, FundingRateSchema)
+- [x] `tests/unit/test_schemas.py` created — 49 unit tests; all pass
+- [x] `config/settings.yaml` fixed — removed `${...}` placeholder strings; real defaults (localhost/5432/etc.); pool_size=10, max_overflow=5, pool_timeout=30
+- [x] `src/config.py` updated — `pool_timeout: int = 30` added to DatabaseSettings; defaults aligned with settings.yaml
+- [x] `scripts/create_tables.sql` created — TimescaleDB DDL for all 6 tables (ohlcv_1h/4h/1d, funding_rates, regime_labels, doge_predictions, doge_replay_buffer); all hypertables, indexes, and constraints
+- [x] `src/processing/storage.py` created — DogeStorage class with SQLAlchemy 2.0 Core; dialect-aware upsert (PostgreSQL/SQLite); filelock on all writes; all 11 methods; full type hints and Google docstrings
+- [x] `tests/unit/test_storage.py` created — 27 unit tests using SQLite engine injection; all pass; full suite: 76 passed, 12 skipped
 
 > **Session 1 notes (2026-03-07):**
 > - Python 3.13.1 is present via `py` launcher; `.venv` created at project root
@@ -509,6 +517,31 @@ After writing any module, explicitly check for these before committing:
 > - FeatureSchema enforces all 21 mandatory DOGE features + NaN/Inf guard + regime_label enum
 > - pytest run result: 12 collected, 12 skipped, coverage 0% (expected — no code exercised yet)
 > - **Phase 1 is COMPLETE. Ready for Phase 2 — Data Ingestion.**
+
+> **Session 2 notes (2026-03-07):**
+> - `src/processing/schemas.py` created — 6 Pydantic v2 DTOs: OHLCVRecord, FundingRateRecord,
+>   CandleValidationResult, FeatureRecord, PredictionRecord, RewardResult
+> - `src/processing/df_schemas.py` created — 3 Pandera DataFrame schemas: OHLCVSchema,
+>   FeatureSchema (DatetimeTZDtype UTC index, coerce=False at schema level to enforce timezone
+>   strictly), FundingRateSchema (8h cadence enforcement)
+> - `tests/unit/test_schemas.py` created — 49 tests; all 49 pass
+> - Key decision: FeatureSchema uses `coerce=False` at the schema level (but `coerce=True` on
+>   individual columns) so tz-naive indices are rejected rather than silently coerced to UTC
+> - All constants extracted to module-level names (EPOCH_MS_MIN/MAX, CONFIDENCE_MIN/MAX, etc.)
+> - `rl_config.yaml` was already created in Session 1 (Phase 9 RL item above updated)
+
+> **Session 3 notes (2026-03-07):**
+> - `config/settings.yaml` bug fixed — `${DB_PORT}` etc. were YAML string literals, not env-var
+>   templates; changed to real defaults. Env-var override in `_build_settings()` still works.
+> - `src/config.py` — added `pool_timeout: int = 30` to DatabaseSettings
+> - `scripts/create_tables.sql` — idempotent TimescaleDB DDL; `abs_reward` is a GENERATED ALWAYS AS
+>   STORED column in PostgreSQL; defined as regular Numeric in SQLAlchemy for cross-DB test compat
+> - `src/processing/storage.py` — DogeStorage with engine injection pattern for tests; `_upsert()`
+>   dynamically imports `postgresql.insert` or `sqlite.insert` based on dialect name; `abs_reward`
+>   computed Python-side in `push_replay_buffer()`; `guard_raw_write()` exported at module level
+> - `tests/unit/test_storage.py` — 27 tests; engine injection via `DogeStorage(s, engine=sqlite_engine)`;
+>   `create_tables()` used for test schema; all 27 pass
+> - Full suite result: **76 passed, 12 skipped** (12 skipped = Session 1 placeholder stubs)
 
 ### Phase 2 — Data Ingestion
 - [ ] `BinanceRESTClient` — rate limiting, retry, weight headers
@@ -572,8 +605,8 @@ After writing any module, explicitly check for these before committing:
 - [ ] Rollback procedure tested
 
 ### Phase 9 — RL Self-Teaching System
-- [ ] `doge_predictions` TimescaleDB table created
-- [ ] `doge_replay_buffer` table created
+- [x] `doge_predictions` TimescaleDB table created — DDL in scripts/create_tables.sql + SQLAlchemy table def in storage.py
+- [x] `doge_replay_buffer` table created — DDL in scripts/create_tables.sql + SQLAlchemy table def in storage.py
 - [x] `rl_config.yaml` created — all horizons, decay constants, replay buffer, curriculum, self-training triggers
 - [ ] `compute_reward()` implemented
 - [ ] Reward unit tests — all 8 scenarios passing

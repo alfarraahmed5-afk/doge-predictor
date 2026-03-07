@@ -1,0 +1,23 @@
+{
+  "version": "0.0.1",
+  "configurations": [
+    {
+      "name": "inference-server",
+      "runtimeExecutable": ".venv/Scripts/python",
+      "runtimeArgs": ["scripts/serve.py"],
+      "port": 8000
+    },
+    {
+      "name": "mlflow-ui",
+      "runtimeExecutable": ".venv/Scripts/mlflow",
+      "runtimeArgs": ["ui", "--backend-store-uri", "sqlite:///mlruns/mlflow.db", "--port", "5000"],
+      "port": 5000
+    },
+    {
+      "name": "jupyter-lab",
+      "runtimeExecutable": ".venv/Scripts/jupyter",
+      "runtimeArgs": ["lab", "--notebook-dir", "notebooks", "--port", "8888", "--no-browser"],
+      "port": 8888
+    }
+  ]
+}

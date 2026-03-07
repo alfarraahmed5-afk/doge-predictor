@@ -80,8 +80,9 @@ class DatabaseSettings(BaseModel):
     name: str = "doge_predictor"
     user: str = "postgres"
     password: str = ""
-    pool_size: int = 5
-    max_overflow: int = 10
+    pool_size: int = 10
+    max_overflow: int = 5
+    pool_timeout: int = 30
 
     @property
     def url(self) -> str:

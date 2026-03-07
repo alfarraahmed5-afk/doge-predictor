@@ -46,3 +46,6 @@ Thumbs.db
 
 # Mypy
 .mypy_cache/
+
+# Claude Code local session config (permissions, etc.)
+.claude/settings.local.json
