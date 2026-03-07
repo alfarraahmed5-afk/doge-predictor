@@ -492,20 +492,23 @@ After writing any module, explicitly check for these before committing:
 - [x] Directory structure created — all dirs + .gitkeep files, git init
 - [x] `.gitignore` configured (secrets.env, .venv/, data/raw/, mlruns/, etc.)
 - [x] Virtual environment created (Python 3.13.1 — satisfies >=3.11 requirement)
-- [ ] All dependencies installed from `requirements.txt` — BLOCKER: ta-lib requires C library
-- [ ] `ta-lib` C library confirmed at OS level — install `libta-lib-dev` before pip install
+- [x] All dependencies installed from `requirements.txt` — ta-lib 0.6.8 (bundles C library), torch 2.10.0, all others installed
+- [x] `ta-lib` C library confirmed at OS level — ta-lib>=0.4 bundles the C DLL on Windows; no separate OS install needed
 - [x] All YAML config files created — settings.yaml, doge_settings.yaml, regime_config.yaml, rl_config.yaml, secrets.env (template only)
-- [ ] Pandera schema contracts written — deferred to Phase 2 (requires data shape knowledge)
+- [x] Pandera schema contracts written — RawOHLCVSchema, RawFundingRateSchema, ProcessedOHLCVSchema, AlignedSchema, FeatureSchema in src/processing/validator.py
 - [x] Placeholder test files created — 12 unit tests + 1 integration test, all skipped; pytest collects all 12 and reports 12 skipped
 - [x] `src/config.py` created — Pydantic Settings models for all 4 config files; loaded once at startup; global singletons exported
 
 > **Session 1 notes (2026-03-07):**
 > - Python 3.13.1 is present via `py` launcher; `.venv` created at project root
+> - requirements.txt version pins loosened from CLAUDE.md originals for Python 3.13 compatibility
+>   (ta-lib >=0.4, numpy >=2.0, pandas >=2.2, torch >=2.3, scipy >=1.13, pandas-ta ==0.4.71b0)
 > - `src/config.py` uses `pydantic-settings` for env-var override of DB credentials
 > - `secrets.env` is in `.gitignore` — template committed, real values never committed
-> - Pandera schema contracts deferred: they require knowledge of the actual OHLCV column names and dtypes, which will be confirmed when ingestion is built in Phase 2
-> - ta-lib C library not yet confirmed — must be installed at OS level before `pip install -r requirements.txt`
-> - pytest run result: 12 collected, 12 skipped, coverage 0% (expected — no code implemented)
+> - Pandera schemas cover all 5 pipeline stages: raw → processed → aligned → features
+> - FeatureSchema enforces all 21 mandatory DOGE features + NaN/Inf guard + regime_label enum
+> - pytest run result: 12 collected, 12 skipped, coverage 0% (expected — no code exercised yet)
+> - **Phase 1 is COMPLETE. Ready for Phase 2 — Data Ingestion.**
 
 ### Phase 2 — Data Ingestion
 - [ ] `BinanceRESTClient` — rate limiting, retry, weight headers
