@@ -1,0 +1,125 @@
+# =============================================================================
+# rl_config.yaml — RL Self-Teaching System Parameters
+# Controls prediction horizons, reward function, replay buffer, curriculum,
+# and self-training triggers.
+# =============================================================================
+
+# Prediction horizons
+# Each horizon defines how far ahead the system predicts and how rewards are weighted.
+horizons:
+  SHORT:
+    candles: 4              # T + 4 hours
+    reward_weight: 1.0      # Correct prediction multiplier
+    punish_weight: 1.5      # Wrong prediction multiplier
+    decay_constant: 0.035   # magnitude_score = exp(-decay × error_pct)
+    label: short
+
+  MEDIUM:
+    candles: 24             # T + 24 hours
+    reward_weight: 1.5
+    punish_weight: 2.0
+    decay_constant: 0.025
+    label: medium
+
+  LONG:
+    candles: 168            # T + 7 days
+    reward_weight: 2.0
+    punish_weight: 2.5
+    decay_constant: 0.015
+    label: long
+
+  MACRO:
+    candles: 720            # T + 30 days
+    reward_weight: 1.5
+    punish_weight: 1.0
+    decay_constant: 0.010
+    label: macro
+
+# Reward function parameters
+# reward = direction_score × magnitude_score × abs(calibration_score)
+reward:
+  # direction_score values
+  direction_correct: 1.0
+  direction_wrong: -1.0
+  direction_flat: 0.1       # flat or hedge position
+
+  # calibration_score bounds
+  calibration_correct_min: 1.0
+  calibration_correct_max: 2.0
+  calibration_wrong_min: -1.0    # becomes -1.0 to -3.0 (max punishment)
+  calibration_wrong_max: -3.0    # high confidence + wrong = max punishment
+
+  # DECOUPLED regime: decay multiplied by this (reduces reward sensitivity)
+  decoupled_decay_multiplier: 0.5
+
+# Replay buffer configuration
+replay_buffer:
+  max_size_per_horizon: 10000       # Maximum entries per horizon
+  priority_threshold: 2.0           # Absolute reward above this is high-priority
+  priority_oversample: 3            # High-priority samples drawn 3× more often
+  min_per_regime: 100               # Minimum samples per regime before training
+  min_samples_to_train: 500         # Minimum total samples before first RL update
+  checkpoint_interval_hours: 6      # How often to checkpoint the buffer
+
+# Prediction store (TimescaleDB)
+prediction_store:
+  table_name: doge_predictions
+  replay_table_name: doge_replay_buffer
+  retention_days: 365               # Never delete — permanent audit trail
+
+# Curriculum stage definitions
+# Stages advance sequentially; no regression allowed.
+curriculum:
+  stages:
+    1:
+      label: SHORT_ONLY
+      horizons: [SHORT]
+      advancement_criteria:
+        min_days: 14
+        min_accuracy: 0.54           # 14-day rolling accuracy > 54%
+        min_mean_reward: 0.30        # mean reward > 0.30
+
+    2:
+      label: SHORT_MEDIUM
+      horizons: [SHORT, MEDIUM]
+      advancement_criteria:
+        min_days: 21
+        min_accuracy: 0.53           # 21-day rolling accuracy > 53%
+        min_mean_reward: 0.20
+
+    3:
+      label: SHORT_MEDIUM_LONG
+      horizons: [SHORT, MEDIUM, LONG]
+      advancement_criteria:
+        min_days: 28
+        min_accuracy: 0.52           # 28-day rolling accuracy > 52%
+        min_mean_reward: 0.15
+
+    4:
+      label: FULL
+      horizons: [SHORT, MEDIUM, LONG, MACRO]
+      advancement_criteria: null    # Final stage — no advancement
+
+  starting_stage: 1
+
+# Self-training triggers
+# A new RL training run fires when ANY of these conditions is met,
+# subject to the minimum cooldown constraint.
+self_training:
+  # Scheduled trigger: every Sunday at 02:00 UTC
+  schedule:
+    day_of_week: sunday
+    hour_utc: 2
+
+  # Event-driven triggers
+  triggers:
+    buffer_fill_pct: 0.80           # Buffer >= 80% full
+    rolling_7d_mean_reward: 0.0     # 7-day mean reward < 0.0 (model degrading)
+    new_regime_predictions: 50      # 50+ new verified predictions in new regime
+
+  # Safety constraint: never run more than once per cooldown period
+  min_cooldown_hours: 48
+
+  # Minimum batch sizes for RL weight update
+  min_batch_size: 32
+  max_batch_size: 256

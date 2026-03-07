@@ -1,0 +1,40 @@
+# =============================================================================
+# settings.yaml — Global Parameters
+# doge_predictor — master config loaded once at startup via src/config.py
+# =============================================================================
+
+project:
+  name: doge_predictor
+  version: "1.0.0"
+  seed: 42
+  log_level: INFO
+
+database:
+  host: "${DB_HOST}"
+  port: "${DB_PORT}"
+  name: "${DB_NAME}"
+  user: "${DB_USER}"
+  password: "${DB_PASSWORD}"
+  pool_size: 5
+  max_overflow: 10
+
+mlflow:
+  tracking_uri: "sqlite:///mlruns/mlflow.db"
+  experiment_name: doge_predictor
+
+paths:
+  data_root: data
+  raw_dir: data/raw
+  processed_dir: data/processed
+  features_dir: data/features
+  checkpoints_dir: data/checkpoints
+  regimes_dir: data/regimes
+  predictions_dir: data/predictions
+  replay_buffers_dir: data/replay_buffers
+  models_dir: mlruns/models
+
+logging:
+  format: "<green>{time:YYYY-MM-DD HH:mm:ss}</green> | <level>{level: <8}</level> | <cyan>{name}</cyan>:<cyan>{line}</cyan> — <level>{message}</level>"
+  rotation: "100 MB"
+  retention: "30 days"
+  log_dir: logs

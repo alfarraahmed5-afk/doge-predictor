@@ -1,0 +1,8 @@
+# Normalize line endings to LF in the repository (regardless of OS)
+* text=auto eol=lf
+
+# Force binary files to never be text-processed
+*.pdf binary
+*.pyc binary
+*.pyo binary
+docs/*.pdf binary

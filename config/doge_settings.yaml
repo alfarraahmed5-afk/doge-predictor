@@ -1,0 +1,104 @@
+# =============================================================================
+# doge_settings.yaml — DOGE-Specific Overrides
+# Inherits global settings from settings.yaml; values here take precedence.
+# =============================================================================
+
+symbol: DOGEUSDT
+secondary_symbols:
+  - BTCUSDT
+  - DOGEBTC
+
+primary_interval: 1h
+secondary_intervals:
+  - 4h
+  - 1d
+
+# Training window boundaries
+training_start_date: "2022-01-01"   # Post-mania normalization era — training only
+context_start_date: "2019-07-01"    # Full history for context features only
+
+# Era labels written to Parquet partitions (NEVER mixed in training folds)
+era_labels:
+  context: context     # pre-2022 data
+  training: training   # post-2022 data
+
+# Walk-forward cross-validation parameters
+walk_forward:
+  training_window_days: 180
+  validation_window_days: 30
+  step_size_days: 7
+  min_training_rows: 3000
+
+# DOGE round number psychological levels (USD)
+round_number_levels:
+  - 0.05
+  - 0.10
+  - 0.15
+  - 0.20
+  - 0.25
+  - 0.30
+  - 0.50
+  - 1.00
+
+# Round number proximity threshold (as % of price)
+round_number_proximity_pct: 0.005
+
+# Risk management
+risk:
+  base_risk_pct: 0.01          # 1% of equity per trade (normal regimes)
+  reduced_risk_pct: 0.005      # 0.5% in RANGING_LOW_VOL or DECOUPLED
+  taker_fee: 0.001             # 0.10% per leg
+  slippage_min: 0.0002         # 0.02% minimum slippage
+  slippage_max: 0.0008         # 0.08% maximum slippage
+  round_number_size_reduction: 0.30  # Reduce position by 30% at round numbers
+  max_drawdown_halt: 0.25      # Stop simulation at 25% drawdown
+
+# Signal thresholds (regime-specific thresholds live in regime_config.yaml)
+default_confidence_threshold: 0.62
+
+# DOGE-specific risk overrides (hard rules — no exceptions)
+btc_crash_threshold: -0.04       # If btc_1h_return < -4%, suppress ALL BUY signals
+volume_spike_threshold: 3.0      # Volume ratio >= 3.0 → volume_spike_flag = 1
+
+# Funding rate hard overrides
+funding_rate_extreme_long: 0.001    # > 0.001 per 8h → suppress ALL BUY signals
+funding_rate_extreme_short: -0.0005 # < -0.0005 per 8h → short squeeze potential
+
+# Feature windows
+correlation_windows:
+  - 12    # hours — doge_btc_corr_12h
+  - 24    # hours — doge_btc_corr_24h
+  - 168   # hours (7d) — doge_btc_corr_7d
+
+dogebtc_momentum_windows:
+  - 6
+  - 24
+  - 48
+
+volume_rolling_window: 20          # periods for rolling mean normalisation
+
+# Backtesting parameters
+backtest:
+  fill_price: next_open            # Always fill at next candle's open
+  taker_fee: 0.001
+  slippage_min: 0.0002
+  slippage_max: 0.0008
+  position_size_pct: 0.01
+  reduced_position_size_pct: 0.005
+  max_drawdown_halt: 0.25
+
+# Minimum acceptance gates (all must pass before deployment)
+acceptance_gates:
+  directional_accuracy_oos: 0.54
+  sharpe_annualized: 1.0
+  sharpe_per_regime: 0.8
+  max_drawdown: 0.20
+  calmar_ratio: 0.6
+  profit_factor: 1.3
+  win_rate: 0.45
+  min_trade_count: 150
+  decoupled_max_drawdown: 0.15
+
+# Inference freshness check
+freshness_check_multiplier: 2      # Last close must be within 2 × interval_ms of now
+inference_lookback_candles: 500    # Candles fed into full feature pipeline at inference

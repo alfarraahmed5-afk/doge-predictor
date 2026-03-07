@@ -1,0 +1,25 @@
+# =============================================================================
+# requirements-dev.txt — Development / Testing Dependencies
+# Install alongside requirements.txt: pip install -r requirements-dev.txt
+# =============================================================================
+
+# Include production dependencies
+-r requirements.txt
+
+# Testing
+pytest==8.*
+pytest-cov==5.*
+pytest-asyncio==0.23.*
+pytest-mock==3.14.*
+
+# Code quality
+ruff==0.4.*
+mypy==1.10.*
+
+# Type stubs
+pandas-stubs==2.2.*
+types-PyYAML==6.0.*
+
+# Notebook (scratch only — never import from notebooks/ in src/)
+jupyter==1.0.*
+ipykernel==6.29.*

@@ -1,0 +1,61 @@
+# =============================================================================
+# requirements.txt — Production Dependencies
+# Pinned versions as specified in CLAUDE.md Section 15
+# =============================================================================
+
+# Binance API
+python-binance==1.0.19
+
+# Data processing
+pandas==2.2.*
+numpy==1.26.*
+
+# Machine learning — deep learning
+torch==2.3.*
+
+# Machine learning — gradient boosting
+xgboost==2.0.*
+
+# Machine learning — utilities
+scikit-learn==1.4.*
+
+# Technical analysis
+# ta-lib requires C library: apt-get install libta-lib-dev (Linux) or brew install ta-lib (macOS)
+ta-lib==0.4.*
+pandas-ta==0.3.*
+
+# Experiment tracking
+mlflow==2.13.*
+
+# Hyperparameter optimisation
+optuna==3.6.*
+
+# Database
+sqlalchemy==2.0.*
+psycopg2-binary==2.9.*
+
+# Config and validation
+pydantic==2.7.*
+pydantic-settings==2.2.*
+
+# Logging
+loguru==0.7.*
+
+# Data validation
+pandera==0.19.*
+
+# File locking
+filelock==3.13.*
+
+# Scientific computing
+scipy==1.13.*
+statsmodels==0.14.*
+
+# Monitoring
+prometheus-client==0.20.*
+
+# YAML parsing
+pyyaml==6.0.*
+
+# Environment variable loading
+python-dotenv==1.0.*

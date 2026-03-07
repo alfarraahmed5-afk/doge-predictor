@@ -1,0 +1,48 @@
+# Secrets — NEVER commit
+config/secrets.env
+
+# Virtual environment
+.venv/
+
+# Raw data — immutable, tracked via DVC or external storage
+data/raw/
+
+# Processed / derived data
+data/processed/
+data/features/
+data/regimes/
+data/predictions/
+data/replay_buffers/
+
+# MLflow artifacts
+mlruns/
+
+# Python cache
+__pycache__/
+*.pyc
+*.pyo
+
+# Test cache and coverage
+.pytest_cache/
+.coverage
+.coverage.*
+htmlcov/
+
+# Build artifacts
+dist/
+build/
+*.egg-info/
+
+# IDE
+.vscode/
+.idea/
+
+# OS
+.DS_Store
+Thumbs.db
+
+# Jupyter checkpoints
+.ipynb_checkpoints/
+
+# Mypy
+.mypy_cache/

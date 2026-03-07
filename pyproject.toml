@@ -1,0 +1,85 @@
+[build-system]
+requires = ["setuptools>=68", "wheel"]
+build-backend = "setuptools.backends.legacy:build"
+
+[project]
+name = "doge_predictor"
+version = "1.0.0"
+description = "DOGECOIN (DOGEUSDT) price prediction algorithm with self-teaching RL loop"
+requires-python = ">=3.11"
+readme = "README.md"
+license = { text = "Proprietary" }
+authors = [{ name = "doge_predictor" }]
+
+[tool.setuptools.packages.find]
+where = ["."]
+include = ["src*"]
+
+# =============================================================================
+# pytest configuration
+# =============================================================================
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+addopts = "--cov=src --cov-report=term-missing --cov-fail-under=80"
+python_files = ["test_*.py"]
+python_classes = ["Test*"]
+python_functions = ["test_*"]
+log_cli = true
+log_cli_level = "INFO"
+
+# =============================================================================
+# ruff — linter and formatter
+# =============================================================================
+[tool.ruff]
+target-version = "py311"
+line-length = 100
+src = ["src", "tests", "scripts"]
+
+[tool.ruff.lint]
+select = [
+    "E",   # pycodestyle errors
+    "W",   # pycodestyle warnings
+    "F",   # pyflakes
+    "I",   # isort
+    "B",   # flake8-bugbear
+    "C4",  # flake8-comprehensions
+    "UP",  # pyupgrade
+    "ANN", # flake8-annotations (enforce type hints)
+    "PT",  # flake8-pytest-style
+]
+ignore = [
+    "ANN101",  # Missing type annotation for self in method
+    "ANN102",  # Missing type annotation for cls in classmethod
+]
+
+[tool.ruff.lint.per-file-ignores]
+"tests/**" = ["ANN"]   # Relax annotation rules in test files
+
+[tool.ruff.format]
+quote-style = "double"
+indent-style = "space"
+
+# =============================================================================
+# mypy — static type checker
+# =============================================================================
+[tool.mypy]
+python_version = "3.11"
+strict = true
+ignore_missing_imports = true
+exclude = ["notebooks/", "scripts/"]
+
+# =============================================================================
+# coverage
+# =============================================================================
+[tool.coverage.run]
+source = ["src"]
+omit = ["tests/*", "notebooks/*", "scripts/*"]
+
+[tool.coverage.report]
+exclude_lines = [
+    "pragma: no cover",
+    "def __repr__",
+    "raise NotImplementedError",
+    "if TYPE_CHECKING:",
+    "@(abc\\.)?abstractmethod",
+]
