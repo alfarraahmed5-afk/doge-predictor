@@ -546,6 +546,25 @@ _apply_global_seed(settings.project.seed)
 # Resolve paths to absolute (done after singleton construction)
 settings.paths = settings.paths.resolve(_PROJECT_ROOT)
 
+
+# ---------------------------------------------------------------------------
+# Public accessor — returns the pre-built singleton (useful for DI / testing)
+# ---------------------------------------------------------------------------
+
+
+def get_settings() -> Settings:
+    """Return the global :class:`Settings` singleton.
+
+    The singleton is built once at module import time. This function is a
+    thin accessor that enables dependency-injection patterns and is used by
+    the Phase 1 quality gate smoke test.
+
+    Returns:
+        The application-wide :class:`Settings` instance.
+    """
+    return settings
+
+
 __all__ = [
     "Settings",
     "DogeSettings",
@@ -555,6 +574,7 @@ __all__ = [
     "doge_settings",
     "regime_config",
     "rl_config",
+    "get_settings",
     "_PROJECT_ROOT",
     "_CONFIG_DIR",
 ]

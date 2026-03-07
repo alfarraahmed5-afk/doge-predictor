@@ -506,6 +506,21 @@ After writing any module, explicitly check for these before committing:
 - [x] `scripts/create_tables.sql` created — TimescaleDB DDL for all 6 tables (ohlcv_1h/4h/1d, funding_rates, regime_labels, doge_predictions, doge_replay_buffer); all hypertables, indexes, and constraints
 - [x] `src/processing/storage.py` created — DogeStorage class with SQLAlchemy 2.0 Core; dialect-aware upsert (PostgreSQL/SQLite); filelock on all writes; all 11 methods; full type hints and Google docstrings
 - [x] `tests/unit/test_storage.py` created — 27 unit tests using SQLite engine injection; all pass; full suite: 76 passed, 12 skipped
+- [x] `src/config.py` updated — `get_settings()` accessor function added and exported
+- [x] `src/utils/__init__.py` created
+- [x] `src/utils/helpers.py` created — 5 pure utility functions: ms_to_datetime, datetime_to_ms, interval_to_ms, compute_expected_row_count, safe_divide
+- [x] `src/utils/logger.py` created — loguru sinks (app.log JSON, rl.log JSON, stderr coloured); stdlib intercept; configure_logging() + get_rl_logger() API
+- [x] `tests/unit/test_helpers.py` created — 40 tests; all pass
+- [x] `tests/unit/test_logger.py` created — 10 tests; all pass
+- [x] `tests/fixtures/doge_sample_data/generate_fixtures.py` created and run — 7 Parquet fixtures (trending_bull/bear, ranging, decoupled, mania, btc_aligned, funding_rates_sample)
+- [x] All 7 fixture Parquet files validated against OHLCVSchema / FundingRateSchema
+- [x] `tests/conftest.py` populated — session-scoped fixtures for all 7 files + all_doge_fixtures dict
+- [x] **Phase 1 Quality Gate PASSED:**
+  - `pytest --cov=src --cov-fail-under=80` → **84.38% coverage** (138 passed, 12 skipped)
+  - `from src.config import get_settings; get_settings()` → Config OK
+  - `from src.processing.storage import DogeStorage` → Storage import OK
+  - `from src.processing.schemas import OHLCVRecord` → Schemas OK
+  - All 7 fixture Parquet files readable, schema-valid
 
 > **Session 1 notes (2026-03-07):**
 > - Python 3.13.1 is present via `py` launcher; `.venv` created at project root
@@ -542,6 +557,22 @@ After writing any module, explicitly check for these before committing:
 > - `tests/unit/test_storage.py` — 27 tests; engine injection via `DogeStorage(s, engine=sqlite_engine)`;
 >   `create_tables()` used for test schema; all 27 pass
 > - Full suite result: **76 passed, 12 skipped** (12 skipped = Session 1 placeholder stubs)
+
+> **Session 4 notes (2026-03-07) — Final Phase 1 session:**
+> - `src/config.py` — `get_settings()` accessor added and exported for DI/testing patterns
+> - `src/utils/helpers.py` — 5 pure utility functions; 100% test coverage
+> - `src/utils/logger.py` — configure_logging() with app.log (JSON), rl.log (RL-only JSON),
+>   stderr (coloured); _InterceptHandler routes stdlib logging through loguru
+> - `tests/unit/test_helpers.py` — 40 tests; all pass
+> - `tests/unit/test_logger.py` — 10 tests; all pass
+> - Fixture generator — _START_MS constant was off by 8h (UTC offset issue); corrected to
+>   1_640_995_200_000 (verified via Python: datetime(2022,1,1,tzinfo=UTC).timestamp()*1000)
+> - `tests/conftest.py` — 7 session-scoped fixtures + all_doge_fixtures convenience dict
+> - **Phase 1 Quality Gate: ALL CHECKS PASSED**
+>   - Coverage: 84.38% (target: 80%) — 138 passed, 12 skipped
+>   - get_settings() smoke: OK; DogeStorage import: OK; OHLCVRecord import: OK
+>   - All 7 Parquet fixtures: readable and schema-valid
+> - **Phase 1 is FULLY COMPLETE. Ready for Phase 2 — Data Ingestion.**
 
 ### Phase 2 — Data Ingestion
 - [ ] `BinanceRESTClient` — rate limiting, retry, weight headers

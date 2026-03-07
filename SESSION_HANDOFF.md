@@ -1,6 +1,6 @@
 # Session Handoff — doge_predictor
 > Feed this document to the AI agent at the start of the next session.
-> It captures the exact state of the project after Session 1 (2026-03-07).
+> It captures the exact state of the project after Sessions 1–4 (2026-03-07).
 
 ---
 
@@ -11,185 +11,161 @@ Read CLAUDE.md in full. Then read this file. Do not write any code until both ar
 ```
 
 **Repo:** https://github.com/alfarraahmed5-afk/doge-predictor
-**Branch:** `feat/phase-1-scaffold` (PR open, not yet merged)
+**Branch:** `feat/phase-1-scaffold` (all sessions committed, PR ready)
 **Root:** `C:\Users\fault\OneDrive\Desktop\DogePred`
 **Python:** 3.13.1 via `py` launcher — use `.venv/Scripts/python` for all commands
 **Git identity (local):** fault / alfarraahmed5@gmail.com
 
 ---
 
-## What was completed in Session 1
+## Phase 1 Status: FULLY COMPLETE
 
-### Phase 1 — Project Initialization (FULLY COMPLETE)
+The Phase 1 Quality Gate has been passed:
 
-All Phase 1 CLAUDE.md checklist items are marked `[x]`.
-
-| Item | File(s) | Notes |
-|---|---|---|
-| Directory structure | All dirs + `.gitkeep` | Canonical layout from CLAUDE.md §2 |
-| `.gitignore` / `.gitattributes` | Root | LF normalization; secrets.env, .venv/, data/raw/ excluded |
-| Virtual environment | `.venv/` | Python 3.13.1; NOT committed |
-| All dependencies installed | `.venv/` | See version table below |
-| Config YAMLs | `config/` | All 4 YAMLs + secrets.env template |
-| `src/config.py` | `src/config.py` | Pydantic Settings singletons for all 4 configs |
-| Pandera schema contracts | `src/processing/validator.py` | 5 schemas: RawOHLCV, RawFunding, ProcessedOHLCV, Aligned, Feature |
-| Placeholder tests | `tests/unit/test_*.py` | 12 unit + 1 integration; all skip; 12/12 collected by pytest |
-| `requirements.txt` | Root | Loosened pins for Python 3.13 compat (see notes) |
-| `pyproject.toml` | Root | pytest + ruff + mypy config |
-| Dev server config | `.claude/launch.json` | 3 configs: inference-server, mlflow-ui, jupyter-lab |
-| MLflow UI | Running on port 5000 | `mlflow ui --backend-store-uri sqlite:///mlruns/mlflow.db` |
-
-### Installed package versions (Python 3.13.1)
-
-| Package | Installed | Note |
-|---|---|---|
-| ta-lib | 0.6.8 | Bundles C library — no OS install needed on Windows |
-| torch | 2.10.0 | Supports Python 3.13 |
-| pandas | 2.3.3 | pandas-ta requires >=2.3.2 |
-| numpy | 2.2.6 | 2.x required for Py 3.13 wheels |
-| xgboost | 3.2.0 | |
-| scikit-learn | 1.8.0 | |
-| pandas-ta | 0.4.71b0 | Pre-release; only version on PyPI |
-| scipy | 1.17.1 | 1.14+ for Py 3.13 wheels |
-| statsmodels | 0.14.6 | |
-| mlflow | 3.10.1 | |
-| optuna | 4.7.0 | |
-| pydantic | 2.13.0b2 | Pre-release |
-| pydantic-settings | 2.13.1 | |
-| pandera | 0.29.0 | |
-| loguru | 0.7.3 | |
-| python-binance | 1.0.19 | |
-| prometheus-client | 0.24.1 | |
-
-### requirements.txt pin changes from CLAUDE.md originals
-
-CLAUDE.md §15 pins were written for Python 3.11/3.12. The following were loosened for 3.13:
-
-| Package | CLAUDE.md pin | Actual pin | Reason |
-|---|---|---|---|
-| numpy | ==1.26.* | >=2.0 | No Py 3.13 wheels for 1.26.x |
-| pandas | ==2.2.* | >=2.2 | pandas-ta requires >=2.3.2 |
-| torch | ==2.3.* | >=2.3 | Py 3.13 support from 2.5+ |
-| ta-lib | ==0.4.* | >=0.4 | 0.6.8 bundles C lib; 0.4 won't build |
-| pandas-ta | ==0.3.* | ==0.4.71b0 | Only pre-releases on PyPI |
-| scipy | ==1.13.* | >=1.13 | Py 3.13 wheels from 1.14+ |
-| All others | ==X.Y.* | >=X.Y | Loosened to allow compatible newer versions |
+| Check | Result |
+|---|---|
+| `pytest --cov=src --cov-fail-under=80` | **84.38%** — 138 passed, 12 skipped |
+| `from src.config import get_settings; get_settings()` | Config OK |
+| `from src.processing.storage import DogeStorage` | Storage import OK |
+| `from src.processing.schemas import OHLCVRecord` | Schemas OK |
+| All 7 fixture Parquet files readable + schema-valid | PASS |
 
 ---
 
-## Exact state of every source file
+## Complete inventory of what exists in src/
 
-### `src/config.py` — EXISTS, COMPLETE
-Pydantic Settings models for all 4 config files. Module-level singletons:
-- `settings` (Settings)
-- `doge_settings` (DogeSettings)
-- `regime_config` (RegimeConfig)
-- `rl_config` (RLConfig)
+### `src/config.py` — COMPLETE
+- Pydantic Settings models for all 4 config files
+- Module-level singletons: `settings`, `doge_settings`, `regime_config`, `rl_config`
+- `get_settings()` accessor function (used by DI patterns and quality gate)
+- Global seed applied at import time (`random`, `np`, `torch`)
+- DB credentials overridable via env vars (`DB_HOST`, `DB_PORT`, `DB_NAME`, `DB_USER`, `DB_PASSWORD`)
 
-Global seed applied at import time. DB credentials overridable via env vars.
-**All other modules import config from here — never re-read YAML directly.**
-
-### `src/processing/validator.py` — EXISTS, COMPLETE
-5 Pandera schema contracts with a `validate()` helper:
-- `RawOHLCVSchema` — raw Binance kline response (11 columns, OHLCV invariants)
+### `src/processing/validator.py` — COMPLETE (Session 1 schemas)
+5 Pandera schema contracts:
+- `RawOHLCVSchema` — raw Binance kline (11 cols, OHLCV invariants)
 - `RawFundingRateSchema` — Binance funding rate response
-- `ProcessedOHLCVSchema` — cleaned OHLCV + `era` column, strict=True
-- `AlignedSchema` — multi-symbol `doge_/btc_/dogebtc_` columns + funding_rate
-- `FeatureSchema` — all 21 mandatory features enforced, NaN/Inf guard, regime_label enum
+- `ProcessedOHLCVSchema` — cleaned OHLCV + `era` col, `strict=True`
+- `AlignedSchema` — multi-symbol doge_/btc_/dogebtc_ + funding_rate
+- `FeatureSchema` — all 21 mandatory features, NaN/Inf guard, regime_label enum
+- `validate()` helper wraps pandera + loguru
 
-### `src/processing/schemas.py` — DOES NOT EXIST YET
-**This is where the next session must start.**
+### `src/processing/schemas.py` — COMPLETE (Session 2 DTOs)
+6 Pydantic v2 record DTOs with validators:
+- `OHLCVRecord` — OHLCV + cross-field OHLC invariants
+- `FundingRateRecord` — funding rate bounded to [-0.01, 0.01]
+- `CandleValidationResult` — validation result summary
+- `FeatureRecord` — all 21 mandatory features as `Optional[float]`
+- `PredictionRecord` — all doge_predictions fields; confidence [0.5, 1.0]; target_open_time > open_time
+- `RewardResult` — RL reward decomposition
 
-### `src/processing/df_schemas.py` — DOES NOT EXIST YET
-**Also needed in the next session.**
+### `src/processing/df_schemas.py` — COMPLETE (Session 2 DataFrame schemas)
+3 Pandera DataFrame schemas:
+- `OHLCVSchema` — strict OHLC invariants, monotonic open_time, NaN/Inf guard
+- `FeatureSchema` — **`coerce=False` at schema level** to enforce UTC DatetimeTZDtype index strictly
+- `FundingRateSchema` — exact 28,800,000 ms (8h) cadence enforcement
+- `validate_df()` helper with loguru logging
 
-### All `src/*/` subdirectory `__init__.py` files — EXIST (stubs only)
-Packages: `ingestion`, `processing`, `regimes`, `features`, `models`, `training`, `evaluation`, `inference`, `monitoring`, `rl`
+### `src/processing/storage.py` — COMPLETE (Session 3)
+`DogeStorage` class — SQLAlchemy 2.0 Core (no ORM):
+- Engine injection in `__init__(settings, *, engine=None)` — `engine` kwarg for test isolation
+- Dialect-aware upsert: `_upsert()` dynamically imports `postgresql.insert` or `sqlite.insert`
+- `FileLock` on all write methods (30s timeout)
+- `guard_raw_write(path)` — raises `PermissionError` if path is inside `data/raw/`
+- All 11 methods: push_ohlcv, get_ohlcv, push_funding_rates, get_funding_rates,
+  push_regime_labels, get_regime_labels, push_prediction, get_matured_unverified,
+  update_prediction_outcome, push_replay_buffer, get_replay_buffer_sample
+- `create_tables()` for test/dev schema creation
+- `dispose()` for engine cleanup
 
-### All implementation files — DO NOT EXIST YET
-Everything in `src/` except `config.py` and `processing/validator.py` is placeholder or empty.
+### `src/utils/__init__.py` — COMPLETE (Session 4, empty)
 
----
+### `src/utils/helpers.py` — COMPLETE (Session 4)
+5 pure utility functions (100% test coverage):
+- `ms_to_datetime(ms: int) -> datetime` — UTC epoch ms → UTC-aware datetime
+- `datetime_to_ms(dt: datetime) -> int` — UTC datetime → epoch ms
+- `interval_to_ms(interval: str) -> int` — '1h' → 3_600_000, '4h' → 14_400_000, etc.
+- `compute_expected_row_count(start_ms, end_ms, interval_ms) -> int`
+- `safe_divide(numerator, denominator, fallback=0.0) -> float`
 
-## Task queued for next session (already planned, not started)
+### `src/utils/logger.py` — COMPLETE (Session 4)
+- `configure_logging(log_level='INFO')` — call ONCE at app startup
+  - Creates `logs/app.log` (JSON, all events)
+  - Creates `logs/rl.log` (JSON, RL events only — filter: `name.startswith('src.rl')`)
+  - Adds coloured stderr sink
+  - Replaces root stdlib logging handler with `_InterceptHandler`
+  - Rotation: 100 MB, retention: 10 files per sink
+- `get_rl_logger()` — returns loguru singleton
 
-The following task was given but interrupted before any code was written:
+### All other `src/*/` `__init__.py` files — empty stubs (Sessions 1)
+`ingestion`, `processing`, `regimes`, `features`, `models`, `training`,
+`evaluation`, `inference`, `monitoring`, `rl`
 
-```
-Phase 1 continues. Today's session: define all data contracts before any data
-is fetched. Contracts must exist before implementation so all modules conform to them.
-
-Build the following in src/processing/schemas.py:
-1. Pydantic models for all data transfer objects:
-   OHLCVRecord:
-     Fields: open_time (int, UTC ms), open, high, low, close, volume,
-             close_time (int), quote_volume, num_trades (int), symbol (str),
-             interval (str), era (Literal['context','training','live'])
-     Validators: high >= max(open,close), low <= min(open,close),
-                 high >= low, close > 0, volume >= 0, open_time < close_time
-   FundingRateRecord:
-     Fields: timestamp_ms (int), symbol (str), funding_rate (float),
-             mark_price (float)
-     Validator: timestamp_ms > 0, funding_rate between -0.01 and 0.01
-   CandleValidationResult:
-     Fields: is_valid (bool), errors (list[str]), row_count (int),
-             gap_count (int), duplicate_count (int)
-   FeatureRecord:
-     Fields: open_time (int), symbol (str), era (str), regime (str),
-             all feature columns as Optional[float] with default None
-   PredictionRecord:
-     Fields: all fields from the doge_predictions schema in CLAUDE.md Section 11
-     Validators: confidence_score between 0.5 and 1.0,
-                 predicted_direction in (-1, 0, 1),
-                 horizon_label in ('SHORT','MEDIUM','LONG','MACRO')
-   RewardResult:
-     Fields: reward_score, direction_score, magnitude_score,
-             calibration_score, error_pct, direction_correct (bool)
-
-2. Pandera DataFrame schemas in src/processing/df_schemas.py:
-   OHLCVSchema:
-     - All required columns present with correct dtypes
-     - open_time is strictly monotonically increasing
-     - high >= open, high >= close (at row level)
-     - low <= open, low <= close (at row level)
-     - close > 0, volume >= 0
-     - No NaN or Inf in any column
-   FeatureSchema:
-     - index is DatetimeTZDtype UTC
-     - No NaN or Inf in any column
-     - All mandatory DOGE features present (list from CLAUDE.md Section 7)
-     - No constant columns (std > 0 for all columns)
-   FundingRateSchema:
-     - timestamp_ms strictly monotonic
-     - interval between rows is exactly 28800000ms (8h)
-
-3. Unit tests in tests/unit/test_schemas.py:
-   - Test OHLCVRecord rejects records where high < low
-   - Test OHLCVRecord rejects records where close <= 0
-   - Test OHLCVSchema rejects DataFrames with NaN
-   - Test OHLCVSchema rejects DataFrames with non-monotonic timestamps
-   - Test PredictionRecord rejects confidence_score > 1.0
-   - Test PredictionRecord rejects invalid horizon_label
-
-Run pytest tests/unit/test_schemas.py — all tests must pass.
-Update CLAUDE.md Section 13.
-```
+### All implementation files beyond the above — DO NOT EXIST YET
 
 ---
 
-## Key architectural decisions made in Session 1
+## Complete inventory of what exists in tests/
 
-1. **`src/config.py` is the single config entry point.** All modules do `from src.config import doge_settings` etc. Never re-read YAML anywhere else.
+### `tests/conftest.py` — COMPLETE (Session 4)
+Session-scoped pytest fixtures loading 7 Parquet files:
+- `doge_trending_bull`, `doge_trending_bear`, `doge_ranging`,
+  `doge_decoupled`, `doge_mania` — 500-row DOGEUSDT fixtures
+- `btc_aligned` — 500-row BTCUSDT aligned to DOGE timestamps
+- `funding_rates_sample` — 200-row 8h funding rate fixture
+- `all_doge_fixtures` — convenience dict of all 5 DOGE fixtures
 
-2. **`src/processing/validator.py` owns the `validate()` helper.** It wraps pandera and logs via loguru. The new `df_schemas.py` will define schema objects; `validator.py` imports and uses them.
+### `tests/fixtures/doge_sample_data/` — COMPLETE (Session 4)
+Generator script and 7 Parquet files:
+- `generate_fixtures.py` — regenerate with `python tests/fixtures/doge_sample_data/generate_fixtures.py`
+- `dogeusdt_1h_trending_bull.parquet` (500 rows, seed=42, EMA20 > EMA50 > EMA200)
+- `dogeusdt_1h_trending_bear.parquet` (500 rows, seed=42)
+- `dogeusdt_1h_ranging.parquet` (500 rows, Ornstein-Uhlenbeck near $0.090)
+- `dogeusdt_1h_decoupled.parquet` (500 rows, independent noise, BTC corr ≈ 0)
+- `dogeusdt_1h_mania.parquet` (200 rows, 10x exponential drift)
+- `btcusdt_1h_aligned.parquet` (500 rows, ~$42,000)
+- `funding_rates_sample.parquet` (200 rows, 8h intervals from 2022-01-01)
 
-3. **`secrets.env` is a template only.** Real API keys go in `config/secrets.env` locally, never committed. `.gitignore` entry confirmed working.
+**Timestamp:** All use `_START_MS = 1_640_995_200_000` (2022-01-01 00:00:00 UTC).
+**Do NOT use `1_641_024_000_000` — that is 08:00 UTC, not midnight.**
 
-4. **`data/raw/` is immutable.** Gitignored. Any write attempt after bootstrap must raise `PermissionError`.
+### `tests/unit/` — test files that exist and pass
+| File | Tests | Status |
+|---|---|---|
+| `test_schemas.py` | 49 | All pass |
+| `test_storage.py` | 27 | All pass (SQLite injection) |
+| `test_helpers.py` | 40 | All pass |
+| `test_logger.py` | 10 | All pass |
+| `test_validator.py` | 1 | Skipped (placeholder) |
+| `test_rest_client.py` | 1 | Skipped (placeholder) |
+| `test_aligner.py` | 1 | Skipped (placeholder) |
+| `test_doge_features.py` | 1 | Skipped (placeholder) |
+| `test_funding_features.py` | 1 | Skipped (placeholder) |
+| `test_htf_features.py` | 1 | Skipped (placeholder) |
+| `test_regime_classifier.py` | 1 | Skipped (placeholder) |
+| `test_walk_forward.py` | 1 | Skipped (placeholder) |
+| `test_backtest.py` | 1 | Skipped (placeholder) |
+| `test_reward.py` | 1 | Skipped (placeholder) |
+| `test_verifier.py` | 1 | Skipped (placeholder) |
+| `test_curriculum.py` | 1 | Skipped (placeholder) |
 
-5. **All timestamps are `int` (UTC epoch milliseconds).** No tz-naive datetimes anywhere.
+**Full suite: 138 passed, 12 skipped — 84.38% src/ coverage**
 
-6. **Version pins in `requirements.txt` are now `>=` style** (not `==`) due to Python 3.13 constraints. The installed versions above are what's actually in `.venv/`.
+---
+
+## Database layer
+
+### `scripts/create_tables.sql` — COMPLETE (Session 3)
+Idempotent TimescaleDB DDL — run once against a live TimescaleDB instance:
+```
+psql -U postgres -d doge_predictor -f scripts/create_tables.sql
+```
+Tables: `ohlcv_1h` (7-day chunks), `ohlcv_4h` (30-day chunks), `ohlcv_1d` (365-day chunks),
+`funding_rates` (30-day chunks), `regime_labels` (plain), `doge_predictions`, `doge_replay_buffer`
+
+**Note:** `doge_replay_buffer.abs_reward` is `GENERATED ALWAYS AS (ABS(reward_score)) STORED`
+in TimescaleDB DDL, but is a regular `Numeric` column in the SQLAlchemy table definition
+(computed in Python before insert). This is intentional for cross-DB test compatibility.
 
 ---
 
@@ -198,33 +174,101 @@ Update CLAUDE.md Section 13.
 ```
 Branch:   feat/phase-1-scaffold
 Remote:   origin → https://github.com/alfarraahmed5-afk/doge-predictor
-Commits:
-  0f640f1  chore: mark Phase 1 fully complete in CLAUDE.md
-  0daf566  feat: Phase 1 blockers resolved — Pandera schemas, dependency fixes
-  6106060  feat: Phase 1 scaffold — complete project structure and config
+Latest commit: feat: Sessions 2-3 — schema contracts, DB layer, TimescaleDB DDL
 ```
 
-PR open at: https://github.com/alfarraahmed5-afk/doge-predictor/compare/feat/phase-1-scaffold
+Session 4 changes (not yet committed — commit before starting Phase 2):
+- `src/config.py` — get_settings() added
+- `src/utils/` — __init__.py, helpers.py, logger.py
+- `tests/unit/test_helpers.py`, `tests/unit/test_logger.py`
+- `tests/fixtures/doge_sample_data/generate_fixtures.py` + 7 Parquet files
+- `tests/conftest.py` — populated
+- `CLAUDE.md` — Section 13 updated
+
+---
+
+## Phase 2 Task: Data Ingestion
+
+**Start with `src/ingestion/rest_client.py`.**
+
+### What to build
+
+```
+src/ingestion/rest_client.py  — BinanceRESTClient
+```
+
+**Requirements:**
+1. Rate-limit tracking: read `X-MBX-USED-WEIGHT-1M` header on every response; back off if > 1,100 weight/min
+2. Exponential backoff retry: max 5 attempts, base delay 1s, cap 60s; retry on 429, 418, 5xx
+3. `get_klines(symbol, interval, start_ms, end_ms, limit=1000)` → `list[dict]`
+4. `get_depth(symbol, limit=100)` → `dict`
+5. `get_agg_trades(symbol, start_ms, limit=1000)` → `list[dict]`
+6. All timestamps in and out are UTC epoch milliseconds (`int`)
+7. No credentials needed for public endpoints — no auth logic
+8. Use `requests` (already installed); connection timeout 10s, read timeout 30s
+9. Loguru logging on every request: method, endpoint, weight used, response time
+10. Every method wraps HTTP calls in `try/except requests.RequestException`
+
+**Base URL:** `https://api.binance.com`
+**Rate limit endpoints (from CLAUDE.md §4.3):**
+```
+GET /api/v3/klines?symbol={s}&interval={i}&limit=1000&startTime={ms}&endTime={ms}
+GET /api/v3/depth?symbol={s}&limit=100
+GET /api/v3/aggTrades?symbol={s}&limit=1000&startTime={ms}
+```
+
+**Unit tests (`tests/unit/test_rest_client.py`):**
+- Use `unittest.mock.patch` to mock `requests.Session.get` — never make real HTTP calls
+- Test rate-limit header parsing
+- Test retry on 429 (assert 5 attempts)
+- Test exponential backoff timing (mock `time.sleep`)
+- Test `get_klines` returns correctly structured data
+- Test connection timeout is passed correctly
+- Replace the placeholder skip with real tests
+
+**After building rest_client.py:**
+- Write `src/ingestion/futures_client.py` (funding rate endpoint) in the same session if time allows
+- Do NOT start bootstrap.py until both clients exist and tests pass
+
+### Architecture decisions already made
+
+| Decision | Detail |
+|---|---|
+| Config import | `from src.config import settings, doge_settings` — never re-read YAML |
+| Logging | `from loguru import logger` — no print() |
+| Timestamps | All `int` UTC epoch ms — use `src.utils.helpers.interval_to_ms()` |
+| Path handling | `pathlib.Path` only |
+| Error handling | `try/except requests.RequestException` on every HTTP call |
+| Rate limit | Read `X-MBX-USED-WEIGHT-1M` header, pause if > 1,100 |
+
+### Quality gate for Phase 2 (QG-01)
+
+Before declaring Phase 2 complete, the following must all pass:
+- `pytest tests/unit/test_rest_client.py` — all pass, no skips
+- `pytest tests/unit/test_aligner.py` — all pass, no skips
+- `pytest --cov=src --cov-fail-under=80` — must remain ≥ 80%
+- Manual smoke: bootstrap ~100 DOGEUSDT 1h rows into a test Parquet file and validate against `OHLCVSchema`
 
 ---
 
 ## How to run things
 
 ```bash
-# Activate venv (Windows)
-.venv\Scripts\activate
-
 # Run all tests
 .venv/Scripts/python -m pytest tests/unit/ --no-cov -v
 
-# Start MLflow UI
-.venv/Scripts/mlflow ui --backend-store-uri sqlite:///mlruns/mlflow.db --port 5000
+# Run with coverage
+.venv/Scripts/python -m pytest tests/unit/ --cov=src --cov-fail-under=80
 
-# Install deps (if new machine)
-.venv/Scripts/pip install -r requirements.txt --pre --only-binary :all:
-.venv/Scripts/pip install -r requirements-dev.txt --pre --only-binary :all:
+# Smoke checks
+.venv/Scripts/python -c "from src.config import get_settings; print(get_settings().project.name)"
+.venv/Scripts/python -c "from src.utils.helpers import interval_to_ms; print(interval_to_ms('1h'))"
+.venv/Scripts/python -c "from src.utils.logger import configure_logging; configure_logging()"
+
+# Regenerate fixtures (if needed)
+.venv/Scripts/python tests/fixtures/doge_sample_data/generate_fixtures.py
 ```
 
 ---
 
-*Generated: 2026-03-07 — end of Session 1*
+*Generated: 2026-03-07 — end of Session 4 (Final Phase 1 session)*
