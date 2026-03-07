@@ -574,8 +574,34 @@ After writing any module, explicitly check for these before committing:
 >   - All 7 Parquet fixtures: readable and schema-valid
 > - **Phase 1 is FULLY COMPLETE. Ready for Phase 2 — Data Ingestion.**
 
+> **Session 5 notes (2026-03-08) — Phase 2, Prompt 2.1:**
+> - New branch `feat/phase-2-ingestion` created from `feat/phase-1-scaffold`
+> - `responses` library installed for HTTP mocking in unit tests
+> - `src/ingestion/exceptions.py` created — 4-class hierarchy:
+>   `BinanceAPIError` (base), `BinanceRateLimitError` (429, carries `retry_after`),
+>   `BinanceAuthError` (401/403), `DataValidationError` (schema contract failure)
+> - `src/ingestion/rest_client.py` created — `BinanceRESTClient`:
+>   - `_request()`: pre-flight weight check, exponential backoff retry (2^attempt s,
+>     max 5 attempts), 429 honours `Retry-After` header, non-retryable on 400/401/403/404
+>   - `get_klines()`: full auto-pagination (close_time+1 as next startTime),
+>     OHLCVSchema validation, deduplication by open_time, row-count sanity warning
+>   - `get_exchange_info()`: 1-hour in-process TTL cache
+>   - `get_order_book()`: returns raw dict
+>   - `get_recent_trades()`: returns typed DataFrame via aggTrades endpoint
+>   - Thread-safe weight counter via `threading.Lock`
+>   - All timestamps are `int` (UTC epoch milliseconds) — never datetime objects
+> - `tests/unit/test_rest_client.py` written — 27 tests, all passing:
+>   - Pagination: 2-page scenario (1 000 + 50 rows) verified; second `startTime` asserted
+>   - Rate limit: persistent 429 → `BinanceRateLimitError`; `Retry-After` sleep verified
+>   - Retry: 503→200 succeeds; 502×3 exhausts and raises; no retry on 400/401/403
+>   - Weight threshold: response with weight=1100 triggers `time.sleep` before next req
+>   - Schema validation: high<low row → `DataValidationError`; non-list → `DataValidationError`
+>   - Caching: `get_exchange_info()` called twice → exactly 1 HTTP request
+>   - Exception attributes: `status_code`, `retry_after` on all typed exceptions
+> - **Full suite result: 165 passed, 12 skipped — Coverage: 86.49% (gate: 80%) ✓**
+
 ### Phase 2 — Data Ingestion
-- [ ] `BinanceRESTClient` — rate limiting, retry, weight headers
+- [x] `BinanceRESTClient` — rate limiting, retry, weight headers
 - [ ] `BinanceFuturesClient` — funding rate endpoint
 - [ ] `BinanceWebSocketClient` — reconnection + watchdog
 - [ ] DOGEUSDT 1h bootstrap complete
@@ -715,5 +741,5 @@ pytest-cov==5.*
 
 ---
 
-*Last updated: March 2026 — v3.0 (RL Edition)*
+*Last updated: 2026-03-08 — v3.1 (Phase 2 Session 1 complete)*
 *Reference documents: `docs/framework.docx`, `docs/devguide_v3.docx`*
