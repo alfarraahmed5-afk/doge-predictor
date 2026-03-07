@@ -7,55 +7,56 @@
 python-binance==1.0.19
 
 # Data processing
-pandas==2.2.*
-numpy==1.26.*
+pandas>=2.2               # pandas-ta 0.4.71b0 requires >=2.3.2; allow 2.x and 3.x
+numpy>=2.0                # 2.x required for Python 3.13 wheels
 
 # Machine learning — deep learning
-torch==2.3.*
+torch>=2.3                 # >=2.5 required for Python 3.13 support
 
 # Machine learning — gradient boosting
-xgboost==2.0.*
+xgboost>=2.0
 
 # Machine learning — utilities
-scikit-learn==1.4.*
+scikit-learn>=1.4
 
 # Technical analysis
-# ta-lib requires C library: apt-get install libta-lib-dev (Linux) or brew install ta-lib (macOS)
-ta-lib==0.4.*
-pandas-ta==0.3.*
+# ta-lib>=0.5 bundles the C library in the wheel (no OS-level install needed on Windows).
+# On Linux: apt-get install libta-lib-dev required for 0.4.x; not required for 0.5+.
+ta-lib>=0.4
+pandas-ta==0.4.71b0      # library only ships pre-releases; 0.4.71b0 is latest on PyPI
 
 # Experiment tracking
-mlflow==2.13.*
+mlflow>=2.13
 
 # Hyperparameter optimisation
-optuna==3.6.*
+optuna>=3.6
 
 # Database
-sqlalchemy==2.0.*
-psycopg2-binary==2.9.*
+sqlalchemy>=2.0
+psycopg2-binary>=2.9
 
 # Config and validation
-pydantic==2.7.*
-pydantic-settings==2.2.*
+pydantic>=2.7
+pydantic-settings>=2.2
 
 # Logging
-loguru==0.7.*
+loguru>=0.7
 
 # Data validation
-pandera==0.19.*
+pandera>=0.19
 
 # File locking
-filelock==3.13.*
+filelock>=3.13
 
 # Scientific computing
-scipy==1.13.*
-statsmodels==0.14.*
+scipy>=1.13               # >=1.14 required for Python 3.13 prebuilt wheels
+statsmodels>=0.14
 
 # Monitoring
-prometheus-client==0.20.*
+prometheus-client>=0.20
 
 # YAML parsing
-pyyaml==6.0.*
+pyyaml>=6.0
 
 # Environment variable loading
-python-dotenv==1.0.*
+python-dotenv>=1.0
