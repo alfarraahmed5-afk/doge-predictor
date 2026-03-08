@@ -58,5 +58,8 @@ prometheus-client>=0.20
 # YAML parsing
 pyyaml>=6.0
 
+# Scheduling (incremental candle updates)
+apscheduler>=3.10
+
 # Environment variable loading
 python-dotenv>=1.0
