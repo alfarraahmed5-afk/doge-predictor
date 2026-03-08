@@ -642,7 +642,39 @@ After writing any module, explicitly check for these before committing:
 >     has independent weight counter and session
 > - **Full suite result: 183 passed, 12 skipped — Coverage: 80.67% (gate: 80%) ✓**
 >
-> **HANDOVER — Next session: Phase 2, Prompt 2.4 — `BinanceFuturesClient`**
+> **Session 7 notes (2026-03-08) — Phase 2, Prompt 2.4 (DataValidator + MultiSymbolAligner):**
+> - `src/processing/validator.py` completely replaced — old Pandera schema file removed;
+>   new `DataValidator` class with 9 OHLCV checks, `validate_funding_rates`, `validate_feature_matrix`
+>   - Check 1 missing columns → `is_valid=False` (no raise)
+>   - Check 2 non-monotonic open_time → `DataValidationError` (CRITICAL)
+>   - Check 3 gap > 3 candles → `DataValidationError` (CRITICAL); gap ≤ 3 → warning
+>   - Check 4 OHLCV sanity (high<low, close≤0, volume<0) → warning
+>   - Check 5 NaN/Inf → `DataValidationError` (CRITICAL) — placed early to avoid crashes
+>   - Check 6 duplicates → warning
+>   - Check 7 row-count deviation > 2 → warning
+>   - Check 8 era assignment mismatch → warning
+>   - Check 9 stale data — only triggered when `is_live_check=True`
+>   - `FeatureSchemaError(DataValidationError)` raised by `validate_feature_matrix` for missing columns
+>   - `_TRAINING_START_MS = 1_640_995_200_000` (2022-01-01 00:00 UTC) — era boundary
+> - `src/processing/aligner.py` created — `MultiSymbolAligner`:
+>   - `AlignmentError` exception; `AlignmentResult(frozen=True)` dataclass
+>   - `align_symbols(symbols, interval, storage) -> AlignmentResult`
+>     6-step: load → common range → trim/index → gap detection → inner join → prefixed concat
+>   - DOGEBTC: forward-fills prices for gaps ≤ 3 candles; volume = 0; `dogebtc_interpolated=True`
+>   - `dogebtc_interpolated` column built via `index.isin(filled_timestamps)` after all gap runs —
+>     NOT via per-row assignment (which produces mixed-type columns in pandas 2.x+)
+>   - `_find_gap_runs(missing_ts, interval_ms)` → `list[(run_start, run_end, run_size)]`
+>   - Column prefix map: DOGEUSDT→doge_, BTCUSDT→btc_, DOGEBTC→dogebtc_
+>   - `self._last_aligned` stores merged DataFrame after each successful call
+> - `tests/unit/test_validator.py` — 43 tests; all passing
+> - `tests/unit/test_aligner.py` — 18 tests; all passing
+> - Bug fix: `test_check7_row_count_deviation_warning` — original test had a 4-candle gap
+>   that caused CRITICAL raise before reaching the row-count check; fixed to use 2-candle gaps
+> - Bug fix: `dogebtc_interpolated` flag — per-row `.loc` assignment produced all-False column
+>   in pandas 2.x; fixed by tracking timestamps in `set[int]` and assigning via `index.isin()`
+> - **Full suite result: 244 passed, 10 skipped — Coverage: 85.62% (gate: 80%) ✓**
+>
+> **HANDOVER — Next session: Phase 2, Prompt 2.5 — `BinanceFuturesClient`**
 > - File to create: `src/ingestion/futures_client.py`
 > - Purpose: fetch historical and live funding rate data from Binance USD-M Futures REST API
 > - Endpoint: `GET /fapi/v1/fundingRate?symbol=DOGEUSDT&limit=1000&startTime={ms}&endTime={ms}`
@@ -671,6 +703,8 @@ After writing any module, explicitly check for these before committing:
 - [x] `src/ingestion/multi_symbol.py` — `MultiSymbolBootstrapper`; Phase A parallel (DOGEUSDT+BTCUSDT via ThreadPoolExecutor), Phase B sequential (DOGEBTC + others); per-thread fresh client via factory callable; `BootstrapReport` summary dict
 - [x] `scripts/bootstrap_doge.py` — CLI entry point; argparse (--symbols, --intervals, --start, --end, --checkpoint-every, --dry-run); tqdm progress bar; `_parse_date_to_ms()` helper; delegates to `MultiSymbolBootstrapper`
 - [x] `tests/unit/test_bootstrap.py` — 18 tests; all passing (3 000-row full run, checkpoint creation/deletion, resume from checkpoint, era context/training/boundary, gap detection, era counts in result)
+- [x] `src/processing/validator.py` — `DataValidator` (9 OHLCV checks, funding rate validator, feature matrix validator with `FeatureSchemaError`); 43 unit tests all passing
+- [x] `src/processing/aligner.py` — `MultiSymbolAligner` with DOGEBTC forward-fill, gap detection, prefixed column output, `AlignmentResult` dataclass; 18 unit tests all passing
 - [ ] `BinanceFuturesClient` — funding rate endpoint
 - [ ] `BinanceWebSocketClient` — reconnection + watchdog
 - [ ] DOGEUSDT 1h bootstrap complete (data fetched from Binance)
@@ -810,5 +844,5 @@ pytest-cov==5.*
 
 ---
 
-*Last updated: 2026-03-08 — v3.1 (Phase 2 Session 1 complete)*
+*Last updated: 2026-03-08 — v3.2 (Phase 2 Session 3 complete — DataValidator + MultiSymbolAligner)*
 *Reference documents: `docs/framework.docx`, `docs/devguide_v3.docx`*
