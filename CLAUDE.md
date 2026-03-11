@@ -905,6 +905,45 @@ After writing any module, explicitly check for these before committing:
 >   after `set_index("timestamp_ms")` on rows sharing the same timestamp;
 >   fixed by replacing `.drop_duplicates()` with `.groupby(level=0).first()`
 > - **Full suite result: 521 passed, 6 skipped — Coverage: 86.35% (gate: 80%) PASS**
+>
+> **Session 14 notes (2026-03-11) — Phase 4, Prompt 4.4 (FeaturePipeline + QG-03):**
+> - `src/features/pipeline.py` — major extension; `FeaturePipeline` class added (12-step `compute_all_features()`);
+>   `add_target_column()` added; `validate_feature_matrix()` signature updated (`expected_columns` param + `missing_expected` key);
+>   `_PASSTHROUGH_COLS` frozenset defines non-feature columns; `_make_run_id()` helper; existing `build_feature_matrix()` preserved for backward compat
+>   - `compute_all_features()` steps: (1) price → (2) volume → (3) lag → (4) doge → (5) funding → (6) HTF →
+>     (7) regime label merge by open_time map → (8) one-hot + ordinal regime features → (9) target column →
+>     (10) dropna → (11) validate_feature_matrix → (12) min-rows assert
+>   - Regime merge: `out["open_time"].map(regime_map).fillna("RANGING_LOW_VOL")` — open_time-keyed dict lookup, not positional
+>   - Feature cols identified dynamically: all numeric cols not in `original_cols` and not in `_PASSTHROUGH_COLS`
+>   - `_save_parquet()` → `{output_dir}/features_{run_id}.parquet`
+>   - `_save_feature_columns_json()` → `{output_dir}/feature_columns_{run_id}.json` (run_id, n_features, feature_columns list)
+>   - `min_rows_override` param allows test/QG use; production default = `cfg.walk_forward.min_training_rows` (3000)
+> - `add_target_column()`: `close.pct_change().shift(-1) > 0` — intentional shift(-1) for supervised label ONLY;
+>   last row always NaN (removed by dropna in Step 10); `np.where(isna, nan, bool.astype(float))` preserves NaN
+> - `scripts/qg03_verify.py` — 8 required checks + 2 advisory:
+>   - Check 1: pipeline runs end-to-end (no exception)
+>   - Check 2: zero NaN in feature matrix (post-dropna)
+>   - Check 3: zero Inf in feature matrix
+>   - Check 4: all 12 DOGE-specific mandatory features present
+>   - Check 5: all 6 regime feature columns present (5 one-hot + regime_encoded)
+>   - Check 6: target column values are 0 or 1 only (no NaN post-dropna)
+>   - Check 7: lag sanity — `log(close[i]/close[i-1]) ≈ log_ret_1[i]` (max abs error < 1e-8)
+>   - Check 8: HTF lookahead guard — `htf_4h_rsi.nunique() == 1` per 4h bucket (groupby `open_time // _MS_PER_4H`)
+>   - Advisory 9: high-correlation pairs (|corr| > 0.98) — 22 expected (SMA/EMA overlap); no PASS/FAIL impact
+>   - Advisory 10: ADF stationarity — 18 non-stationary features (SMA/EMA/VWAP price-level features); expected
+>   - Synthetic data: 800 1h rows; pipeline invoked with `min_rows_override=300`; exits 0/PASS, 1/FAIL
+> - `tests/unit/test_pipeline.py` — 46 tests; all pass:
+>   - `TestAddTargetColumn`: formula, last row NaN, copy-not-inplace, missing-col raises ValueError
+>   - `TestValidateFeatureMatrix`: NaN/Inf/mandatory/expected_columns/strict mode
+>   - `TestFeaturePipelineInit`: run_id generated, defaults, custom run_id
+>   - `TestFeaturePipelinePersistence`: Parquet save, JSON save, content validation
+>   - `TestFeaturePipelineIntegration`: zero NaN/Inf, all mandatory features, target 0/1,
+>     log_ret_1 sanity, htf_4h_rsi constant within 4h periods, saves-to-disk path
+>   - `TestBuildFeatureMatrix`: backward-compat functional API (unchanged from Phase 4.3)
+>   - Negative: `compute_all_features` with `min_rows_override=None` on 50-row input raises `ValueError`
+> - **QG-03 PASSED: ALL 8 REQUIRED CHECKS PASS** (800 → 600 rows after dropna, 84 feature cols)
+> - **Full suite result: 567 passed, 6 skipped — Coverage: 89.48% (gate: 80%) PASS**
+> - **Phase 4 is FULLY COMPLETE. Ready for Phase 5 — Model Training.**
 
 ### Phase 2 — Data Ingestion
 - [x] `BinanceRESTClient` — rate limiting, retry, weight headers
@@ -950,12 +989,14 @@ After writing any module, explicitly check for these before committing:
 - [x] `src/features/funding_features.py` — funding_rate, funding_rate_zscore, funding_extreme_long/short, funding_available (5 features); 90-period z-score on native 8h; forward-fill causal; pre-Oct-2020 → 0
 - [x] `src/features/htf_features.py` — 4h RSI/trend/BB%B, 1d trend/return, ath_distance; merge_asof lookahead guard (lookup_key = open_time + interval_ms); fixed ATH log(0.731/close)
 - [x] `src/features/orderbook_features.py` — bid_ask_spread, order_book_imbalance (top 10 levels); dict output for live inference
-- [x] `src/features/pipeline.py` — `build_feature_matrix()` 7-stage orchestrator; `validate_feature_matrix()`; `MANDATORY_FEATURE_NAMES` frozenset
+- [x] `src/features/pipeline.py` — `build_feature_matrix()` 7-stage orchestrator (Phase 4.3); `FeaturePipeline` class with `compute_all_features()` 12-step (Phase 4.4); `add_target_column()`; updated `validate_feature_matrix(expected_columns)`; `_PASSTHROUGH_COLS`; Parquet + JSON persistence; `MANDATORY_FEATURE_NAMES` frozenset
 - [x] `tests/unit/test_htf_features.py` — MANDATORY boundary test at 2022-01-01 15:00 UTC passes; ath_distance formula verified; orderbook tests included
 - [x] `tests/unit/test_funding_features.py` — forward-fill, funding_available, z-score, extreme flags, edge cases; all pass
-- [x] All feature unit tests passing (521 passed, 6 skipped — 86.35% coverage)
-- [ ] Zero NaN/Inf in feature matrix confirmed (validate_feature_matrix exists; QG-03 script not yet written)
-- [ ] QG-03 passed
+- [x] `tests/unit/test_pipeline.py` — 46 tests; `TestAddTargetColumn`, `TestValidateFeatureMatrix`, `TestFeaturePipelineInit`, `TestFeaturePipelinePersistence`, `TestFeaturePipelineIntegration`, `TestBuildFeatureMatrix`; all pass
+- [x] `scripts/qg03_verify.py` — 8 required checks + 2 advisory; `--in-memory-test` 800-row synthetic data; exits 0/1
+- [x] All feature unit tests passing (567 passed, 6 skipped — 89.48% coverage)
+- [x] Zero NaN/Inf in feature matrix confirmed — QG-03 Check 2 + Check 3 both PASS
+- [x] QG-03 passed — ALL 8 REQUIRED CHECKS PASS (800 → 600 rows, 84 feature cols)
 
 ### Phase 5 — Model Training
 - [ ] `BaseModel` abstract class implemented
@@ -1068,5 +1109,5 @@ pytest-cov==5.*
 
 ---
 
-*Last updated: 2026-03-11 — v3.5 (Phase 4 Prompt 4.3 complete; funding/HTF/orderbook/pipeline done; 521 tests pass; handover to Phase 4 QG-03)*
+*Last updated: 2026-03-11 — v3.6 (Phase 4 FULLY COMPLETE; FeaturePipeline + QG-03 PASS; 567 tests pass; 89.48% coverage; ready for Phase 5 — Model Training)*
 *Reference documents: `docs/framework.docx`, `docs/devguide_v3.docx`*
