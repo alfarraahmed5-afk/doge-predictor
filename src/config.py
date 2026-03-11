@@ -205,6 +205,12 @@ class IndicatorSettings(BaseModel):
         default_factory=lambda: [1, 3, 6, 12, 24, 48, 168]
     )
     momentum_periods: list[int] = Field(default_factory=lambda: [6, 12, 24, 48])
+    funding_zscore_window: int = 90
+    htf_rsi_period: int = 14
+    htf_ema_fast: int = 20
+    htf_ema_slow: int = 50
+    htf_bb_period: int = 20
+    htf_bb_std: float = 2.0
 
 
 class WalkForwardSettings(BaseModel):
@@ -269,6 +275,7 @@ class DogeSettings(BaseModel):
         default_factory=lambda: [0.05, 0.10, 0.15, 0.20, 0.25, 0.30, 0.50, 1.00]
     )
     round_number_proximity_pct: float = 0.005
+    doge_ath_price: float = 0.731
     risk: RiskSettings = Field(default_factory=RiskSettings)
     default_confidence_threshold: float = 0.62
     btc_crash_threshold: float = -0.04

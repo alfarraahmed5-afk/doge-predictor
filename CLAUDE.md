@@ -853,12 +853,58 @@ After writing any module, explicitly check for these before committing:
 > - Key design: rolling(20, min_periods=20) — first 19 rows NaN, not min_periods=1
 > - **Full suite result: 461 passed, 8 skipped — Coverage: 88.26% (gate: 80%) PASS**
 >
-> **HANDOVER — Phase 4, Prompt 4.3: Next steps**
-> - `src/features/funding_features.py` — funding_rate forward-fill to 1h, z-score (90-period), extreme flags
-> - `src/features/htf_features.py` — 4h and 1d derived features WITH explicit lookahead guard
-> - `src/features/pipeline.py` — orchestrates full feature computation (price + volume + lag + doge + funding + htf + regime)
-> - `tests/unit/test_htf_features.py` — HTF lookahead boundary tests MANDATORY
-> - QG-03: zero NaN/Inf in feature matrix; all 12+5 mandatory features present
+> **Session 13 notes (2026-03-11) — Phase 4, Prompt 4.3:**
+> - `config/doge_settings.yaml` updated — `doge_ath_price: 0.731` added (DOGE ATH on Binance 2021-05-08);
+>   6 HTF/funding indicator constants added to `indicators:` section:
+>   `funding_zscore_window: 90`, `htf_rsi_period: 14`, `htf_ema_fast: 20`, `htf_ema_slow: 50`,
+>   `htf_bb_period: 20`, `htf_bb_std: 2.0`
+> - `src/config.py` updated — `doge_ath_price: float = 0.731` added to `DogeSettings`;
+>   6 matching fields added to `IndicatorSettings` (backward-compatible, all prior tests pass)
+> - `src/features/funding_features.py` (complete rewrite) — 5 canonical features:
+>   `funding_rate`, `funding_rate_zscore`, `funding_extreme_long`, `funding_extreme_short`,
+>   `funding_available`
+>   - `funding_available` derived from `~np.isnan(funding_1h)` BEFORE fillna — pre-launch rows → 0
+>   - Z-score computed on native 8h series (rolling 90 × 8h = 30 days), then forward-filled to 1h
+>     (avoids collapsing std from repeated forward-filled 1h values)
+>   - Deduplication by timestamp: `.groupby(level=0).first()` (not `.drop_duplicates()` which
+>     deduplicates by value, not index — would cause `reindex` to fail on duplicate labels)
+>   - Forward-fill via union of 8h and 1h timestamps: strictly causal, no backward-fill
+>   - Pre-Oct-2020 rows (before Binance DOGEUSDT perp launch): all features = 0.0
+> - `src/features/htf_features.py` (complete rewrite) — 6 features:
+>   `htf_4h_rsi`, `htf_4h_trend`, `htf_4h_bb_pctb`, `htf_1d_trend`, `htf_1d_return`, `ath_distance`
+>   - CRITICAL lookahead guard: `lookup_key = open_time + interval_ms` (bar close time);
+>     `pd.merge_asof(left_on=open_time_1h, right_on=lookup_key, direction="backward")` — only
+>     uses bars where `lookup_key <= T` (fully closed)
+>   - `ath_distance = log(cfg.doge_ath_price / close)` — FIXED ATH ($0.731 from config);
+>     NOT expanding().max() which would understate ATH for pre-2021 data
+>   - Trend: `np.where(ema_fast > ema_slow, 1, -1)` for valid (non-NaN) EMAs only;
+>     0 only during EMA warmup rows (NaN); no "neutral" state for valid EMAs
+> - `src/features/orderbook_features.py` (new) — inference-time only; returns `dict[str, float]`:
+>   - `bid_ask_spread = (best_ask - best_bid) / mid_price`
+>   - `order_book_imbalance = (bid_vol_10 - ask_vol_10) / (bid_vol_10 + ask_vol_10)` (top 10 levels)
+>   - Returns `{"bid_ask_spread": 0.0, "order_book_imbalance": 0.0}` on empty/missing book
+> - `src/features/pipeline.py` — `build_feature_matrix()` orchestrates all 7 stages in order;
+>   `validate_feature_matrix()` post-pipeline NaN/Inf + mandatory-feature check;
+>   `MANDATORY_FEATURE_NAMES: frozenset` = union of DOGE + FUNDING + HTF + REGIME feature names
+> - `tests/unit/test_htf_features.py` (complete rewrite):
+>   - `TestHTFMandatoryBoundary` (MANDATORY — 3 tests at 2022-01-01 15:00 UTC):
+>     `test_rsi_at_1500_equals_rsi_at_1200` — rows 12–15 share same RSI (same [08:00–12:00] bar);
+>     `test_rsi_constant_from_1200_to_1500` — all 4 values identical;
+>     `test_rsi_at_1500_not_equal_to_rsi_at_1600` — row 16 updates RSI ([12:00–16:00] bar just closed)
+>   - `TestHTFAtDistance`: ath_distance ≥ 0; zero when close == ATH; matches `log(ath/close)` exactly
+>   - `TestHTFOrderBook`: spread, imbalance range [-1,1], bid-heavy/ask-heavy scenarios, empty book
+> - `tests/unit/test_funding_features.py` (replaced placeholder):
+>   - `TestFundingForwardFill`: all 8 candles same rate, rate updates at next period, no backward fill
+>   - `TestFundingAvailable`: pre-Oct-2020 rows → `funding_available = 0`, `funding_rate = 0.0`
+>   - `TestFundingZScore`: 90-period window, bounded, constant within 8h period
+>   - `TestFundingExtremeFlags`: boundary tests (>= 0.001 / <= -0.0005 per spec)
+>   - `TestFundingEdgeCases`: duplicate timestamps deduplicated, gaps handled, missing columns raise
+> - Bug fix: `test_htf_1d_trend_valid_values` — `IntCastingNaNError` on warmup NaN rows;
+>   fixed with `.dropna()` before `.astype(int)`
+> - Bug fix: `test_duplicate_funding_timestamps_deduplicated` — `reindex` fails with duplicate index
+>   after `set_index("timestamp_ms")` on rows sharing the same timestamp;
+>   fixed by replacing `.drop_duplicates()` with `.groupby(level=0).first()`
+> - **Full suite result: 521 passed, 6 skipped — Coverage: 86.35% (gate: 80%) PASS**
 
 ### Phase 2 — Data Ingestion
 - [x] `BinanceRESTClient` — rate limiting, retry, weight headers
@@ -901,11 +947,14 @@ After writing any module, explicitly check for these before committing:
 - [x] `tests/unit/test_price_indicators.py` — 71 tests covering all 3 modules; MANDATORY lag sanity tests pass
 - [x] `src/features/doge_specific.py` — `compute_doge_features(doge_df, btc_df, dogebtc_df)`; Groups 1–4 (BTC corr / DOGEBTC momentum / volume spike / round numbers); log-return correlation; vectorised round-number diff matrix; `DOGE_FEATURE_NAMES` exported
 - [x] `tests/unit/test_doge_features.py` — 40 tests; all 6 MANDATORY tests pass (BTC corr, spike at exact threshold, ADF stationarity, momentum formula, round-number flag, no-lookahead)
-- [ ] `src/features/funding_features.py` — funding_rate, z-score, extreme flags
-- [ ] `src/features/htf_features.py` — 4h and 1d derived features with lookahead guard
-- [ ] `src/features/pipeline.py` — full feature pipeline
-- [ ] All feature unit tests passing
-- [ ] Zero NaN/Inf in feature matrix confirmed
+- [x] `src/features/funding_features.py` — funding_rate, funding_rate_zscore, funding_extreme_long/short, funding_available (5 features); 90-period z-score on native 8h; forward-fill causal; pre-Oct-2020 → 0
+- [x] `src/features/htf_features.py` — 4h RSI/trend/BB%B, 1d trend/return, ath_distance; merge_asof lookahead guard (lookup_key = open_time + interval_ms); fixed ATH log(0.731/close)
+- [x] `src/features/orderbook_features.py` — bid_ask_spread, order_book_imbalance (top 10 levels); dict output for live inference
+- [x] `src/features/pipeline.py` — `build_feature_matrix()` 7-stage orchestrator; `validate_feature_matrix()`; `MANDATORY_FEATURE_NAMES` frozenset
+- [x] `tests/unit/test_htf_features.py` — MANDATORY boundary test at 2022-01-01 15:00 UTC passes; ath_distance formula verified; orderbook tests included
+- [x] `tests/unit/test_funding_features.py` — forward-fill, funding_available, z-score, extreme flags, edge cases; all pass
+- [x] All feature unit tests passing (521 passed, 6 skipped — 86.35% coverage)
+- [ ] Zero NaN/Inf in feature matrix confirmed (validate_feature_matrix exists; QG-03 script not yet written)
 - [ ] QG-03 passed
 
 ### Phase 5 — Model Training
@@ -1019,5 +1068,5 @@ pytest-cov==5.*
 
 ---
 
-*Last updated: 2026-03-09 — v3.4 (Phase 3 complete; QG-04 PASS; handover to Phase 4 — Feature Engineering)*
+*Last updated: 2026-03-11 — v3.5 (Phase 4 Prompt 4.3 complete; funding/HTF/orderbook/pipeline done; 521 tests pass; handover to Phase 4 QG-03)*
 *Reference documents: `docs/framework.docx`, `docs/devguide_v3.docx`*

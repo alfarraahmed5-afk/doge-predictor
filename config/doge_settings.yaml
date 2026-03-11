@@ -53,6 +53,10 @@ risk:
   round_number_size_reduction: 0.30  # Reduce position by 30% at round numbers
   max_drawdown_halt: 0.25      # Stop simulation at 25% drawdown
 
+# DOGE all-time high price (USD) — used for ath_distance feature
+# DOGE reached $0.731 on 2021-05-08 on Binance spot
+doge_ath_price: 0.731
+
 # Signal thresholds (regime-specific thresholds live in regime_config.yaml)
 default_confidence_threshold: 0.62
 
@@ -130,3 +134,9 @@ indicators:
   rolling_kurt_period: 24
   log_return_periods: [1, 3, 6, 12, 24, 48, 168]
   momentum_periods: [6, 12, 24, 48]
+  funding_zscore_window: 90        # 90 x 8h = 30d rolling z-score for funding rate
+  htf_rsi_period: 14               # RSI period applied to 4h candles
+  htf_ema_fast: 20                 # Fast EMA period for HTF trend detection
+  htf_ema_slow: 50                 # Slow EMA period for HTF trend detection
+  htf_bb_period: 20                # BB period for 4h %B feature
+  htf_bb_std: 2.0                  # BB standard deviation multiplier
