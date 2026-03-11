@@ -806,15 +806,57 @@ After writing any module, explicitly check for these before committing:
 > - **Full suite result: 350 passed, 9 skipped — Coverage: 86.63% (gate: 80%) PASS**
 > - **Phase 3 is FULLY COMPLETE. Ready for Phase 4 — Feature Engineering.**
 >
-> **HANDOVER — Phase 4, Prompt 4.1: Next steps**
-> - `src/features/price_indicators.py` — SMA/EMA/MACD/RSI/BB/ATR/Stoch/Ichimoku
-> - `src/features/volume_indicators.py` — OBV/VWAP/CMF/CVD/volume ratios
-> - `src/features/lag_features.py` — log returns, momentum, rolling stats
-> - `src/features/doge_specific.py` — all 12 mandatory DOGE features (Section 7 of CLAUDE.md)
-> - `src/features/funding_features.py` — funding_rate, z-score, extreme flags
-> - `src/features/htf_features.py` — 4h and 1d derived features WITH lookahead guard
-> - `src/features/pipeline.py` — orchestrates full feature computation
-> - `tests/unit/test_doge_features.py` — lag sanity tests MANDATORY
+> **Session 11 notes (2026-03-11) — Phase 4, Prompt 4.1:**
+> - `config/doge_settings.yaml` — `indicators:` section added (30 period constants)
+> - `src/config.py` — `IndicatorSettings` Pydantic model added; wired into `DogeSettings.indicators`
+>   via `Field(default_factory=IndicatorSettings)`; backward-compatible (all existing tests pass)
+> - `src/features/price_indicators.py` — `compute_price_indicators()`:
+>   SMA (7/21/50/200), EMA (7/14/21/50/200), price_vs_ema200, MACD+hist+direction,
+>   RSI-14+overbought/oversold flags, BB upper/lower/pct_b/width/squeeze_flag,
+>   ATR-14 + atr_14_norm, Stoch K/D + crossover_flag, Ichimoku cloud position (±1/0)
+>   - ta-lib used for all computations; no pandas-ta mixing
+>   - Ichimoku: current_span = span.shift(26) — shift into PAST, max lookback 78 rows, no lookahead
+>   - NaN-safe crossover/hist-direction: `.fillna(False)` / `.fillna(0)` before boolean ops
+> - `src/features/volume_indicators.py` — `compute_volume_indicators()`:
+>   OBV (talib), obv_ema_ratio (ewm span=20), VWAP (groupby UTC-midnight cumsum reset),
+>   price_vs_vwap, volume_ma_20, volume_ma_ratio, CMF-20, cvd_approx (cumsum of delta)
+>   - VWAP: `dt.normalize()` groups by UTC midnight → resets each calendar day, no lookahead
+> - `src/features/lag_features.py` — `compute_lag_features()`:
+>   log_ret_{1,3,6,12,24,48,168} via shift(+N), rolling vol_{6,12,24,48,168},
+>   rolling_skew_24, rolling_kurt_24, mom_{6,12,24,48}, hl_range
+>   - CRITICAL: all shifts use shift(+N) — backward — never shift(-N)
+> - `tests/unit/test_price_indicators.py` — 71 tests; all passing:
+>   - Price: missing-col validation, same-index, RSI [0,100], RSI flag consistency, BB structure,
+>     squeeze flag, MACD hist direction (+1/-1/0), ATR non-negative, Ichimoku {-1,0,1},
+>     no NaN after SMA-200 warmup (200 rows)
+>   - Volume: OBV monotone on rising price, VWAP daily reset, CMF [-1,1], CVD on full-buy candles,
+>     no NaN after warmup
+>   - Lag: **test_no_future_leakage_log_ret_1** (lookahead trap), **test_lag_sanity_log_ret_1/6/24**
+>     (MANDATORY — explicit formula equality check), first row NaN, 168-period warmup enforced,
+>     vol non-negative, mom formula match, hl_range non-negative
+> - **Full suite result: 421 passed, 9 skipped — Coverage: 87.90% (gate: 80%) PASS**
+>
+> **Session 12 notes (2026-03-11) — Phase 4, Prompt 4.2:**
+> - `src/features/doge_specific.py` created — `compute_doge_features(doge_df, btc_df, dogebtc_df)`:
+>   - Group 1 BTC corr: rolling(N).corr on LOG RETURNS; `_CORR_WINDOW_NAMES` {12/24/168} → exact names
+>   - Group 2 DOGEBTC momentum: log(dogebtc[T]/dogebtc[T-N]) via shift(+N); dedicated pair, not approx
+>   - Group 3 Volume spike: vol/rolling_20_mean, flag (≥3.0), magnitude (ratio.clip(10)/10)
+>   - Group 4 Round numbers: vectorised (n_rows, n_levels) diff matrix; nearest level, distance, flag
+>   - `DOGE_FEATURE_NAMES` tuple exported; `_align_to_doge()` helper with open_time-keyed reindex
+> - `tests/unit/test_doge_features.py` — 40 tests; all pass:
+>   - MANDATORY #1: raw_corr > 0.98 (spurious) AND |raw-lr_corr| > 0.05 (log-return differs)
+>   - MANDATORY #2: V = 57C/17 (exact rolling-mean math) gives ratio = 3.0 → flag = 1
+>   - MANDATORY #3: ADF p < 0.05 for volume_ratio (statsmodels.adfuller, autolag=AIC)
+>   - MANDATORY #4: dogebtc_mom_6h exact formula equality (pd.testing.assert_series_equal, rtol=1e-12)
+>   - MANDATORY #5: at_round_number_flag == 1 when close == 0.10
+>   - MANDATORY #6: slice from long DataFrame (not re-seed) to avoid RNG-divergence false positive
+> - Key design: rolling(20, min_periods=20) — first 19 rows NaN, not min_periods=1
+> - **Full suite result: 461 passed, 8 skipped — Coverage: 88.26% (gate: 80%) PASS**
+>
+> **HANDOVER — Phase 4, Prompt 4.3: Next steps**
+> - `src/features/funding_features.py` — funding_rate forward-fill to 1h, z-score (90-period), extreme flags
+> - `src/features/htf_features.py` — 4h and 1d derived features WITH explicit lookahead guard
+> - `src/features/pipeline.py` — orchestrates full feature computation (price + volume + lag + doge + funding + htf + regime)
 > - `tests/unit/test_htf_features.py` — HTF lookahead boundary tests MANDATORY
 > - QG-03: zero NaN/Inf in feature matrix; all 12+5 mandatory features present
 
@@ -851,14 +893,19 @@ After writing any module, explicitly check for these before committing:
 - [x] QG-04 passed (--in-memory-test mode)
 
 ### Phase 4 — Feature Engineering
-- [ ] Standard price indicators complete
-- [ ] Standard volume indicators complete
-- [ ] Lag and rolling features complete
-- [ ] All 12 DOGE-specific features complete
-- [ ] HTF features complete with lookahead guard
-- [ ] Feature pipeline end-to-end working
-- [ ] Zero NaN/Inf in feature matrix confirmed
+- [x] `src/features/price_indicators.py` — `compute_price_indicators()`; SMA/EMA/price_vs_ema200/MACD+direction/RSI+flags/BB+squeeze/ATR+norm/Stoch+crossover/Ichimoku cloud position; ta-lib throughout; all periods from `IndicatorSettings`
+- [x] `src/features/volume_indicators.py` — `compute_volume_indicators()`; OBV/obv_ema_ratio/VWAP+price_vs_vwap/volume_ma_20/volume_ma_ratio/CMF-20/cvd_approx; VWAP resets at UTC midnight
+- [x] `src/features/lag_features.py` — `compute_lag_features()`; log_ret_{1,3,6,12,24,48,168}/vol_{6,12,24,48,168}/rolling_skew_24/rolling_kurt_24/mom_{6,12,24,48}/hl_range; all shift(+N) — no lookahead
+- [x] `config/doge_settings.yaml` — `indicators:` section added (30 period constants, no hardcoded values in src/)
+- [x] `src/config.py` — `IndicatorSettings` model added; `DogeSettings.indicators` field wired in; backward-compatible
+- [x] `tests/unit/test_price_indicators.py` — 71 tests covering all 3 modules; MANDATORY lag sanity tests pass
+- [x] `src/features/doge_specific.py` — `compute_doge_features(doge_df, btc_df, dogebtc_df)`; Groups 1–4 (BTC corr / DOGEBTC momentum / volume spike / round numbers); log-return correlation; vectorised round-number diff matrix; `DOGE_FEATURE_NAMES` exported
+- [x] `tests/unit/test_doge_features.py` — 40 tests; all 6 MANDATORY tests pass (BTC corr, spike at exact threshold, ADF stationarity, momentum formula, round-number flag, no-lookahead)
+- [ ] `src/features/funding_features.py` — funding_rate, z-score, extreme flags
+- [ ] `src/features/htf_features.py` — 4h and 1d derived features with lookahead guard
+- [ ] `src/features/pipeline.py` — full feature pipeline
 - [ ] All feature unit tests passing
+- [ ] Zero NaN/Inf in feature matrix confirmed
 - [ ] QG-03 passed
 
 ### Phase 5 — Model Training

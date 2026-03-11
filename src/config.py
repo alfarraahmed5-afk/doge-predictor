@@ -171,6 +171,42 @@ class Settings(BaseModel):
 # ---------------------------------------------------------------------------
 
 
+class IndicatorSettings(BaseModel):
+    """Technical indicator periods loaded from config/doge_settings.yaml.
+
+    All feature modules read their period constants from this model so that
+    no magic numbers appear in ``src/``.
+    """
+
+    sma_periods: list[int] = Field(default_factory=lambda: [7, 21, 50, 200])
+    ema_periods: list[int] = Field(default_factory=lambda: [7, 14, 21, 50, 200])
+    rsi_period: int = 14
+    macd_fast: int = 12
+    macd_slow: int = 26
+    macd_signal: int = 9
+    bb_period: int = 20
+    bb_std: float = 2.0
+    bb_squeeze_threshold: float = 0.04
+    atr_period: int = 14
+    stoch_fastk: int = 14
+    stoch_slowk: int = 3
+    stoch_slowd: int = 3
+    ichimoku_tenkan: int = 9
+    ichimoku_kijun: int = 26
+    ichimoku_senkou_b: int = 52
+    ichimoku_displacement: int = 26
+    volume_ma_period: int = 20
+    cmf_period: int = 20
+    obv_ema_span: int = 20
+    rolling_vol_windows: list[int] = Field(default_factory=lambda: [6, 12, 24, 48, 168])
+    rolling_skew_period: int = 24
+    rolling_kurt_period: int = 24
+    log_return_periods: list[int] = Field(
+        default_factory=lambda: [1, 3, 6, 12, 24, 48, 168]
+    )
+    momentum_periods: list[int] = Field(default_factory=lambda: [6, 12, 24, 48])
+
+
 class WalkForwardSettings(BaseModel):
     """Walk-forward cross-validation parameters."""
 
@@ -227,6 +263,7 @@ class DogeSettings(BaseModel):
     secondary_intervals: list[str] = Field(default_factory=lambda: ["4h", "1d"])
     training_start_date: str = "2022-01-01"
     context_start_date: str = "2019-07-01"
+    indicators: IndicatorSettings = Field(default_factory=IndicatorSettings)
     walk_forward: WalkForwardSettings = Field(default_factory=WalkForwardSettings)
     round_number_levels: list[float] = Field(
         default_factory=lambda: [0.05, 0.10, 0.15, 0.20, 0.25, 0.30, 0.50, 1.00]
@@ -568,6 +605,7 @@ def get_settings() -> Settings:
 __all__ = [
     "Settings",
     "DogeSettings",
+    "IndicatorSettings",
     "RegimeConfig",
     "RLConfig",
     "settings",
