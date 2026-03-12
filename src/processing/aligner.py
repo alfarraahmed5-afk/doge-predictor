@@ -137,9 +137,18 @@ class MultiSymbolAligner:
     See the module docstring for the full alignment specification.
     """
 
-    def __init__(self) -> None:
-        """Initialise the aligner (no arguments required)."""
+    def __init__(self, max_fill_candles: int = _MAX_FILL_CANDLES) -> None:
+        """Initialise the aligner.
+
+        Args:
+            max_fill_candles: Maximum consecutive missing candles that are
+                tolerated before :class:`AlignmentError` is raised.  Defaults
+                to :data:`_MAX_FILL_CANDLES` (3) for strict synthetic-data
+                testing.  Pass a higher value (e.g. 24) when aligning real
+                exchange data that may have maintenance-window gaps.
+        """
         self._last_aligned: pd.DataFrame = pd.DataFrame()
+        self._max_fill_candles: int = max_fill_candles
 
     # ------------------------------------------------------------------
     # Public API
@@ -285,11 +294,11 @@ class MultiSymbolAligner:
             gap_runs = self._find_gap_runs(missing_ts.tolist(), interval_ms)
 
             for run_start, run_end, run_size in gap_runs:
-                if run_size > _MAX_FILL_CANDLES:
+                if run_size > self._max_fill_candles:
                     raise AlignmentError(
                         f"Symbol {sym}/{interval}: gap of {run_size} candles "
                         f"starting at {run_start} exceeds maximum "
-                        f"({_MAX_FILL_CANDLES}). Cannot continue alignment."
+                        f"({self._max_fill_candles}). Cannot continue alignment."
                     )
 
                 if sym == _FILL_SYMBOL:

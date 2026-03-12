@@ -213,6 +213,29 @@ class IndicatorSettings(BaseModel):
     htf_bb_std: float = 2.0
 
 
+class LSTMSettings(BaseModel):
+    """LSTM model hyperparameters loaded from config/doge_settings.yaml.
+
+    All values sourced from YAML — no magic numbers in ``src/``.
+    See CLAUDE.md §8 for the architectural specification.
+    """
+
+    sequence_length: int = 60
+    hidden_size_1: int = 128
+    hidden_size_2: int = 64
+    dense_size: int = 32
+    dropout_lstm: float = 0.2
+    dropout_dense: float = 0.3
+    learning_rate: float = 1e-3
+    max_epochs: int = 100
+    early_stopping_patience: int = 15
+    lr_scheduler_patience: int = 5
+    lr_scheduler_factor: float = 0.5
+    lr_scheduler_min_lr: float = 1e-6
+    gradient_clip_norm: float = 1.0
+    batch_size: int = 64
+
+
 class WalkForwardSettings(BaseModel):
     """Walk-forward cross-validation parameters."""
 
@@ -270,6 +293,7 @@ class DogeSettings(BaseModel):
     training_start_date: str = "2022-01-01"
     context_start_date: str = "2019-07-01"
     indicators: IndicatorSettings = Field(default_factory=IndicatorSettings)
+    lstm: LSTMSettings = Field(default_factory=LSTMSettings)
     walk_forward: WalkForwardSettings = Field(default_factory=WalkForwardSettings)
     round_number_levels: list[float] = Field(
         default_factory=lambda: [0.05, 0.10, 0.15, 0.20, 0.25, 0.30, 0.50, 1.00]

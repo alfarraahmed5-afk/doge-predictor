@@ -140,3 +140,20 @@ indicators:
   htf_ema_slow: 50                 # Slow EMA period for HTF trend detection
   htf_bb_period: 20                # BB period for 4h %B feature
   htf_bb_std: 2.0                  # BB standard deviation multiplier
+
+# LSTM model hyperparameters (from CLAUDE.md §8 — no magic numbers in src/)
+lstm:
+  sequence_length: 60              # Number of 1h candles fed as one sequence
+  hidden_size_1: 128               # First LSTM layer hidden size
+  hidden_size_2: 64                # Second LSTM layer hidden size
+  dense_size: 32                   # Fully-connected layer size
+  dropout_lstm: 0.2                # Dropout applied between LSTM layers
+  dropout_dense: 0.3               # Dropout applied after dense layer
+  learning_rate: 0.001             # Adam initial learning rate
+  max_epochs: 100                  # Maximum training epochs (early stopping may halt earlier)
+  early_stopping_patience: 15      # Epochs without val_loss improvement before stopping
+  lr_scheduler_patience: 5         # Epochs without improvement before LR reduction
+  lr_scheduler_factor: 0.5         # LR reduction factor (new_lr = lr * factor)
+  lr_scheduler_min_lr: 0.000001    # Minimum learning rate floor
+  gradient_clip_norm: 1.0          # Max gradient L2-norm — MANDATORY (prevents NaN loss)
+  batch_size: 64                   # Training batch size (shuffle=False — time series)

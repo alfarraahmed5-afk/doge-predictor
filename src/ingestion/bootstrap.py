@@ -476,9 +476,12 @@ class BootstrapEngine:
             # ---- advance cursor ------------------------------------------
             current_start = last_close_time + 1
 
-            # Stop if last batch was smaller than batch_size (final page)
-            if n < self._batch_size:
-                break
+            # NOTE: Do NOT break on n < batch_size here.  The outer while-loop
+            # condition (current_start < end_ms) handles termination for the
+            # normal continuous-data case.  Stopping early on short batches
+            # causes truncation when the symbol listing date falls inside the
+            # first batch window, or when minor gaps reduce a page below 1 000.
+            # The only early-exit is the `batch_df.empty` check above.
 
         # ---- completion: delete checkpoint --------------------------------
         self._delete_checkpoint(symbol, interval)

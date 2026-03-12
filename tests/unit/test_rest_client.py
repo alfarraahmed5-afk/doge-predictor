@@ -280,7 +280,10 @@ def test_get_klines_pagination_two_pages(
         headers=_WEIGHT_HDR_NORMAL,
     )
 
-    end_ms = _START_MS + (page1_count + page2_count + 100) * _INTERVAL_MS
+    # end_ms is set to exactly cover both pages.  With timestamp-based stopping
+    # (no short-page heuristic), the loop advances current_start to end_ms after
+    # page 2 and exits via the `current_start >= end_ms` guard — exactly 2 calls.
+    end_ms = _START_MS + (page1_count + page2_count) * _INTERVAL_MS
     df = client.get_klines("DOGEUSDT", "1h", _START_MS, end_ms)
 
     assert len(df) == page1_count + page2_count
@@ -317,7 +320,9 @@ def test_get_klines_deduplicates_boundary_rows(
         headers=_WEIGHT_HDR_NORMAL,
     )
 
-    end_ms = _START_MS + 20 * _INTERVAL_MS
+    # 10 rows + 5 extra rows = 15 distinct open_times (0..14).
+    # end_ms covers exactly row 14's close_time so the guard fires immediately.
+    end_ms = _START_MS + 15 * _INTERVAL_MS
     df = client.get_klines("DOGEUSDT", "1h", _START_MS, end_ms)
 
     # 10 unique rows + 5 new rows = 15 (duplicate removed)

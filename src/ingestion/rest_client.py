@@ -523,13 +523,24 @@ class BinanceRESTClient:
                 self.weight_used,
             )
 
-            # Stopping conditions: last page (< 1000 rows) or reached end_ms
+            # Stopping condition: reached or passed the requested end window.
+            # NOTE: Do NOT stop on short pages (len < limit). Binance can return
+            # fewer than `limit` rows mid-history (e.g. when the symbol listing
+            # date falls inside a batch window, or when there are minor data gaps).
+            # Stopping on short pages causes premature termination and truncated
+            # datasets. The only safe stopping conditions are timestamp-based.
             last_close_time: int = int(raw_page[-1][6])
-            if len(raw_page) < _MAX_KLINES_PER_REQUEST or last_close_time >= end_ms:
+            if last_close_time >= end_ms:
                 break
 
             # Advance to next page
             current_start = last_close_time + 1
+
+            # Guard: if the next cursor has reached or passed the end boundary
+            # (can happen when last_close_time = end_ms - 1ms, i.e. the batch
+            # exactly fills the window), exit without making a redundant request.
+            if current_start >= end_ms:
+                break
 
         # Build and validate DataFrame
         if not all_rows:
