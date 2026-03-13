@@ -731,4 +731,256 @@ class ModelTrainer:
         logger.info("ModelTrainer: =================================")
 
 
-__all__ = ["ModelTrainer", "TrainingResult"]
+__all__ = ["ModelTrainer", "TrainingResult", "retrain_weekly"]
+
+
+# ---------------------------------------------------------------------------
+# retrain_weekly — standalone weekly retraining workflow
+# ---------------------------------------------------------------------------
+
+
+def retrain_weekly(
+    storage: Any,
+    mlflow_tracking_uri: str | None = None,
+    output_dir: Path | None = None,
+    walk_forward_cfg: "WalkForwardSettings | None" = None,
+) -> bool:
+    """Execute the weekly model retraining workflow.
+
+    Steps:
+
+    1. Archive the current production model run with tag ``'previous-production'``.
+    2. Rebuild the feature matrix from the latest data in *storage*.
+    3. Run the full :class:`ModelTrainer` training pipeline (hyperopt disabled
+       for speed).
+    4. Compare OOS accuracy of the new model vs the production model stored in
+       MLflow.
+    5. If the new model is better (or no production model exists): tag the new
+       run as ``'candidate'`` and return ``True``.
+    6. If the new model is worse: tag as ``'rejected'``, log the comparison,
+       and return ``False``.
+
+    Shadow-mode promotion (Steps 6–8 in the original design) is handled
+    externally: after returning ``True`` the caller should set
+    ``SHADOW_MODE=true`` and schedule :mod:`scripts.qg09_verify` to run
+    after 48 h.
+
+    Args:
+        storage: Initialised :class:`~src.processing.storage.DogeStorage`
+            instance (SQLite or TimescaleDB).
+        mlflow_tracking_uri: MLflow tracking URI.  ``None`` reads from
+            ``config/settings.yaml``.
+        output_dir: Directory to save the newly trained model artefacts.
+            ``None`` saves to a timestamped sub-directory of ``models/``.
+        walk_forward_cfg: Walk-forward settings override.  ``None`` uses
+            ``doge_settings.walk_forward`` defaults.
+
+    Returns:
+        ``True`` when the new model is tagged as ``'candidate'``;
+        ``False`` when training fails or the new model is worse.
+    """
+    import datetime as _dt  # noqa: PLC0415
+
+    logger.info("retrain_weekly: starting weekly retraining workflow")
+
+    # ------------------------------------------------------------------
+    # Step 1 — archive current production model as 'previous-production'
+    # ------------------------------------------------------------------
+    try:
+        import mlflow  # noqa: PLC0415
+
+        tracking_uri = mlflow_tracking_uri
+        if tracking_uri is None:
+            tracking_uri = _global_settings.mlflow.tracking_uri
+
+        mlflow.set_tracking_uri(tracking_uri)
+        client = mlflow.tracking.MlflowClient(tracking_uri=tracking_uri)
+        exp = client.get_experiment_by_name("doge_predictor")
+
+        production_accuracy: float | None = None
+
+        if exp is not None:
+            runs = client.search_runs(
+                experiment_ids=[exp.experiment_id],
+                filter_string="tags.stage = 'production'",
+                max_results=1,
+            )
+            if runs:
+                prod_run = runs[0]
+                client.set_tag(prod_run.info.run_id, "stage", "previous-production")
+                production_accuracy = prod_run.data.metrics.get("mean_val_accuracy")
+                logger.info(
+                    "retrain_weekly: archived production run {} as 'previous-production'",
+                    prod_run.info.run_id,
+                )
+    except Exception as exc:  # noqa: BLE001
+        logger.warning(
+            "retrain_weekly: MLflow step 1 failed — {} (continuing)", exc
+        )
+        production_accuracy = None
+
+    # ------------------------------------------------------------------
+    # Step 2 — rebuild feature matrix from latest storage data
+    # ------------------------------------------------------------------
+    feature_df: pd.DataFrame | None = None
+    regime_labels: pd.Series | None = None
+
+    try:
+        feature_df, regime_labels = _build_feature_matrix_from_storage(storage)
+    except Exception as exc:  # noqa: BLE001
+        logger.error("retrain_weekly: feature matrix build failed — {}", exc)
+        return False
+
+    if feature_df is None or len(feature_df) < (
+        walk_forward_cfg.min_training_rows if walk_forward_cfg else doge_settings.walk_forward.min_training_rows
+    ):
+        logger.error(
+            "retrain_weekly: insufficient data ({} rows) for retraining",
+            len(feature_df) if feature_df is not None else 0,
+        )
+        return False
+
+    # ------------------------------------------------------------------
+    # Step 3 — run full training pipeline (hyperopt disabled for speed)
+    # ------------------------------------------------------------------
+    ts_suffix = _dt.datetime.utcnow().strftime("%Y%m%d_%H%M%S")
+    effective_output_dir = (
+        Path(output_dir) if output_dir is not None
+        else Path("models") / f"weekly_{ts_suffix}"
+    )
+
+    trainer = ModelTrainer(
+        output_dir=effective_output_dir,
+        mlflow_tracking_uri=mlflow_tracking_uri,
+        walk_forward_cfg=walk_forward_cfg,
+        run_hyperopt=False,
+    )
+
+    try:
+        result = trainer.train_full(feature_df, regime_labels)  # type: ignore[arg-type]
+    except Exception as exc:  # noqa: BLE001
+        logger.error("retrain_weekly: training failed — {}", exc)
+        return False
+
+    if result.n_folds == 0:
+        logger.error("retrain_weekly: training produced no valid folds — aborting")
+        return False
+
+    # ------------------------------------------------------------------
+    # Step 4 — compare new model vs production
+    # ------------------------------------------------------------------
+    new_accuracy = result.mean_val_accuracy
+
+    logger.info(
+        "retrain_weekly: new_accuracy={:.4f}  production_accuracy={}",
+        new_accuracy,
+        f"{production_accuracy:.4f}" if production_accuracy is not None else "N/A",
+    )
+
+    # ------------------------------------------------------------------
+    # Step 5 — tag new model as 'candidate' or 'rejected'
+    # ------------------------------------------------------------------
+    is_better = production_accuracy is None or new_accuracy > production_accuracy
+
+    try:
+        import mlflow as _mlflow  # noqa: PLC0415
+
+        if result.mlflow_run_id:
+            _mlflow.set_tracking_uri(
+                mlflow_tracking_uri or _global_settings.mlflow.tracking_uri
+            )
+            _client = _mlflow.tracking.MlflowClient()
+            tag_value = "candidate" if is_better else "rejected"
+            _client.set_tag(result.mlflow_run_id, "stage", tag_value)
+            logger.info(
+                "retrain_weekly: new model run {} tagged as '{}'",
+                result.mlflow_run_id,
+                tag_value,
+            )
+    except Exception as exc:  # noqa: BLE001
+        logger.warning("retrain_weekly: MLflow tagging failed — {} (continuing)", exc)
+
+    if is_better:
+        logger.info(
+            "retrain_weekly: new model ({:.4f}) is better than production ({}) "
+            "— tagged as 'candidate'. Deploy shadow mode and run QG-09 after 48h.",
+            new_accuracy,
+            f"{production_accuracy:.4f}" if production_accuracy is not None else "none",
+        )
+        return True
+    else:
+        logger.warning(
+            "retrain_weekly: new model ({:.4f}) is NOT better than production "
+            "({:.4f}) — keeping current production model",
+            new_accuracy,
+            production_accuracy,  # type: ignore[arg-type]
+        )
+        return False
+
+
+def _build_feature_matrix_from_storage(
+    storage: Any,
+    lookback_days: int = 270,
+) -> tuple[pd.DataFrame, pd.Series]:
+    """Load recent OHLCV data from *storage* and build a feature matrix.
+
+    Args:
+        storage: :class:`~src.processing.storage.DogeStorage` instance.
+        lookback_days: Number of days of history to load (default: 270 ≈ 9 months).
+
+    Returns:
+        ``(feature_df, regime_labels)`` — both index-aligned.
+
+    Raises:
+        RuntimeError: If DOGEUSDT OHLCV data cannot be loaded.
+    """
+    import time as _time  # noqa: PLC0415
+
+    from src.features.pipeline import FeaturePipeline  # noqa: PLC0415
+    from src.regimes.classifier import DogeRegimeClassifier  # noqa: PLC0415
+
+    end_ms = int(_time.time() * 1_000)
+    start_ms = end_ms - lookback_days * 24 * 3_600_000
+
+    doge_df = storage.get_ohlcv("DOGEUSDT", "1h", start_ms, end_ms)
+    if doge_df is None or len(doge_df) == 0:
+        raise RuntimeError("retrain_weekly: no DOGEUSDT data in storage")
+
+    btc_df = storage.get_ohlcv("BTCUSDT", "1h", start_ms, end_ms)
+    dogebtc_df = storage.get_ohlcv("DOGEBTC", "1h", start_ms, end_ms)
+    doge_4h = storage.get_ohlcv("DOGEUSDT", "4h", start_ms, end_ms)
+    doge_1d = storage.get_ohlcv("DOGEUSDT", "1d", start_ms, end_ms)
+    funding_df = storage.get_funding_rates(start_ms, end_ms)
+
+    doge_df = doge_df.copy()
+    if "era" not in doge_df.columns:
+        _TRAINING_START_MS = 1_640_995_200_000
+        doge_df["era"] = np.where(
+            doge_df["open_time"] >= _TRAINING_START_MS, "training", "context"
+        )
+
+    pipeline = FeaturePipeline()
+    feature_df = pipeline.compute_all_features(
+        doge_1h=doge_df,
+        btc_1h=btc_df,
+        dogebtc_1h=dogebtc_df,
+        doge_4h=doge_4h,
+        doge_1d=doge_1d,
+        funding_df=funding_df,
+        min_rows_override=100,
+    )
+
+    classifier = DogeRegimeClassifier()
+    regime_series = classifier.classify(doge_df, btc_df=btc_df)
+    regime_labels = regime_series.reindex(feature_df.index).fillna("RANGING_LOW_VOL")
+
+    logger.info(
+        "_build_feature_matrix_from_storage: {} rows, {} features",
+        len(feature_df),
+        len([c for c in feature_df.columns if c not in {
+            "open_time", "close_time", "open", "high", "low", "close",
+            "volume", "quote_volume", "num_trades", "symbol", "era",
+            "interval", "regime_label", "target", "is_interpolated",
+        }]),
+    )
+    return feature_df, regime_labels

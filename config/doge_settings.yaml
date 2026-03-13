@@ -141,6 +141,22 @@ indicators:
   htf_bb_period: 20                # BB period for 4h %B feature
   htf_bb_std: 2.0                  # BB standard deviation multiplier
 
+# Monitoring thresholds
+monitoring:
+  # Drift detection — Population Stability Index (PSI) thresholds
+  drift_psi_warning: 0.10          # PSI >= 0.10 → moderate drift (WARNING alert)
+  drift_psi_critical: 0.25         # PSI >= 0.25 → significant drift (CRITICAL alert)
+  drift_reference_window_days: 30  # Days of training history used as reference distribution
+  drift_test_window_candles: 168   # Recent candles (7 days) used as test window
+  drift_n_bins: 10                 # Number of bins for PSI histogram
+  drift_min_non_null_pct: 0.80     # Feature must be >= 80% non-null to be evaluated
+
+  # Regime monitor thresholds
+  regime_max_decoupled_hours: 72   # Alert if DECOUPLED lasts > 72 consecutive hours
+  regime_max_any_hours: 240        # Alert if any regime lasts > 240 hours (10 days)
+  regime_oscillation_window_hours: 24  # Window to count transitions for oscillation check
+  regime_oscillation_max_transitions: 6  # > 6 transitions in 24h = rapid oscillation
+
 # LSTM model hyperparameters (from CLAUDE.md §8 — no magic numbers in src/)
 lstm:
   sequence_length: 60              # Number of 1h candles fed as one sequence

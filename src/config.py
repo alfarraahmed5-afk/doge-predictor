@@ -283,6 +283,21 @@ class BacktestSettings(BaseModel):
     max_drawdown_halt: float = 0.25
 
 
+class MonitoringSettings(BaseModel):
+    """Thresholds for drift detection and regime monitoring."""
+
+    drift_psi_warning: float = 0.10
+    drift_psi_critical: float = 0.25
+    drift_reference_window_days: int = 30
+    drift_test_window_candles: int = 168
+    drift_n_bins: int = 10
+    drift_min_non_null_pct: float = 0.80
+    regime_max_decoupled_hours: int = 72
+    regime_max_any_hours: int = 240
+    regime_oscillation_window_hours: int = 24
+    regime_oscillation_max_transitions: int = 6
+
+
 class DogeSettings(BaseModel):
     """DOGE-specific configuration loaded from config/doge_settings.yaml."""
 
@@ -313,6 +328,7 @@ class DogeSettings(BaseModel):
     acceptance_gates: AcceptanceGates = Field(default_factory=AcceptanceGates)
     freshness_check_multiplier: int = 2
     inference_lookback_candles: int = 500
+    monitoring: MonitoringSettings = Field(default_factory=MonitoringSettings)
 
 
 # ---------------------------------------------------------------------------
