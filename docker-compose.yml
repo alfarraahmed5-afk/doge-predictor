@@ -1,0 +1,186 @@
+# =============================================================================
+# docker-compose.yml — doge_predictor full-stack deployment
+#
+# Services:
+#   app         — inference server (health :8000, metrics :8001)
+#   timescaledb — TimescaleDB (PostgreSQL + time-series extensions) :5432
+#   prometheus  — metrics scraper                                   :9090
+#   grafana     — dashboards                                        :3000
+#
+# Quick start:
+#   docker compose up -d
+#   docker compose logs -f app
+#
+# Environment:
+#   Copy config/secrets.env.example to config/secrets.env and fill in values.
+#   The secrets.env file is excluded from git (.gitignore).
+# =============================================================================
+
+version: "3.9"
+
+# ---------------------------------------------------------------------------
+# Shared networks
+# ---------------------------------------------------------------------------
+networks:
+  doge_net:
+    driver: bridge
+
+# ---------------------------------------------------------------------------
+# Persistent volumes
+# ---------------------------------------------------------------------------
+volumes:
+  timescaledb_data:
+    driver: local
+  grafana_data:
+    driver: local
+  prometheus_data:
+    driver: local
+  models_data:
+    driver: local
+  logs_data:
+    driver: local
+
+# ---------------------------------------------------------------------------
+# Services
+# ---------------------------------------------------------------------------
+services:
+
+  # -------------------------------------------------------------------------
+  # TimescaleDB — PostgreSQL with time-series hypertable support
+  # -------------------------------------------------------------------------
+  timescaledb:
+    image: timescale/timescaledb:latest-pg15
+    container_name: doge_timescaledb
+    restart: unless-stopped
+    networks:
+      - doge_net
+    ports:
+      - "5432:5432"
+    environment:
+      POSTGRES_DB: doge_predictor
+      POSTGRES_USER: doge_user
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:-doge_password_change_me}
+      TIMESCALEDB_TELEMETRY: "off"
+    volumes:
+      - timescaledb_data:/var/lib/postgresql/data
+      - ./scripts/create_tables.sql:/docker-entrypoint-initdb.d/01_create_tables.sql:ro
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U doge_user -d doge_predictor"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+      start_period: 30s
+
+  # -------------------------------------------------------------------------
+  # doge_predictor app — inference server
+  # -------------------------------------------------------------------------
+  app:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    image: doge_predictor:latest
+    container_name: doge_app
+    restart: unless-stopped
+    depends_on:
+      timescaledb:
+        condition: service_healthy
+    networks:
+      - doge_net
+    ports:
+      - "8000:8000"   # /health endpoint
+      - "8001:8001"   # Prometheus /metrics endpoint
+    environment:
+      # Database — overrides settings.yaml; connects to the timescaledb service
+      DOGE_DB_HOST: timescaledb
+      DOGE_DB_PORT: "5432"
+      DOGE_DB_NAME: doge_predictor
+      DOGE_DB_USER: doge_user
+      DOGE_DB_PASSWORD: ${POSTGRES_PASSWORD:-doge_password_change_me}
+      # Binance API keys (set in secrets.env)
+      BINANCE_API_KEY: ${BINANCE_API_KEY:-}
+      BINANCE_API_SECRET: ${BINANCE_API_SECRET:-}
+      # Health / metrics ports (match Dockerfile CMD defaults)
+      HEALTH_PORT: "8000"
+      METRICS_PORT: "8001"
+      # Shadow mode — set to "true" to log predictions without emitting signals
+      SHADOW_MODE: ${SHADOW_MODE:-false}
+      # Python
+      PYTHONUNBUFFERED: "1"
+    env_file:
+      - config/secrets.env
+    volumes:
+      - models_data:/app/models
+      - logs_data:/app/logs
+    command:
+      - python
+      - scripts/serve.py
+      - --models-dir
+      - /app/models
+      - --health-port
+      - "8000"
+      - --metrics-port
+      - "8001"
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:8000/health"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      start_period: 60s
+
+  # -------------------------------------------------------------------------
+  # Prometheus — scrapes metrics from the app service
+  # -------------------------------------------------------------------------
+  prometheus:
+    image: prom/prometheus:latest
+    container_name: doge_prometheus
+    restart: unless-stopped
+    depends_on:
+      - app
+    networks:
+      - doge_net
+    ports:
+      - "9090:9090"
+    volumes:
+      - ./config/prometheus.yml:/etc/prometheus/prometheus.yml:ro
+      - prometheus_data:/prometheus
+    command:
+      - "--config.file=/etc/prometheus/prometheus.yml"
+      - "--storage.tsdb.path=/prometheus"
+      - "--storage.tsdb.retention.time=30d"
+      - "--web.console.libraries=/usr/share/prometheus/console_libraries"
+      - "--web.console.templates=/usr/share/prometheus/consoles"
+    healthcheck:
+      test: ["CMD", "wget", "-q", "--spider", "http://localhost:9090/-/ready"]
+      interval: 15s
+      timeout: 5s
+      retries: 3
+
+  # -------------------------------------------------------------------------
+  # Grafana — dashboards backed by Prometheus
+  # -------------------------------------------------------------------------
+  grafana:
+    image: grafana/grafana:latest
+    container_name: doge_grafana
+    restart: unless-stopped
+    depends_on:
+      - prometheus
+    networks:
+      - doge_net
+    ports:
+      - "3000:3000"
+    environment:
+      GF_SECURITY_ADMIN_USER: admin
+      GF_SECURITY_ADMIN_PASSWORD: ${GRAFANA_PASSWORD:-grafana_password_change_me}
+      GF_USERS_ALLOW_SIGN_UP: "false"
+      GF_ANALYTICS_REPORTING_ENABLED: "false"
+      # Auto-provision Prometheus as a data source
+      GF_DATASOURCES_DEFAULT_NAME: Prometheus
+    volumes:
+      - grafana_data:/var/lib/grafana
+      - ./grafana/provisioning:/etc/grafana/provisioning:ro
+    healthcheck:
+      test: ["CMD", "wget", "-q", "--spider", "http://localhost:3000/api/health"]
+      interval: 15s
+      timeout: 5s
+      retries: 3
+      start_period: 30s

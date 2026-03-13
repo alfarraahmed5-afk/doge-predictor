@@ -1,0 +1,40 @@
+# =============================================================================
+# prometheus.yml — Prometheus scrape configuration
+#
+# Mounted read-only into the prometheus container via docker-compose.yml.
+# Scrapes metrics from the doge_predictor app service every 15 seconds.
+# =============================================================================
+
+global:
+  scrape_interval: 15s          # How often to scrape targets
+  evaluation_interval: 15s      # How often to evaluate rules
+  scrape_timeout: 10s
+
+# ---------------------------------------------------------------------------
+# Alerting (stub — connect a real Alertmanager in production)
+# ---------------------------------------------------------------------------
+alerting:
+  alertmanagers:
+    - static_configs:
+        - targets: []
+
+# ---------------------------------------------------------------------------
+# Scrape configurations
+# ---------------------------------------------------------------------------
+scrape_configs:
+
+  # Prometheus self-monitoring
+  - job_name: "prometheus"
+    static_configs:
+      - targets: ["localhost:9090"]
+
+  # doge_predictor inference server
+  - job_name: "doge_predictor"
+    scrape_interval: 15s
+    static_configs:
+      - targets: ["app:8001"]   # app service, Prometheus metrics port
+    metrics_path: "/metrics"
+    relabel_configs:
+      - source_labels: [__address__]
+        target_label: instance
+        replacement: "doge_predictor_app"

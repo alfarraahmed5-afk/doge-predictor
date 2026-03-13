@@ -1029,6 +1029,76 @@ class InferenceEngine:
             _HASH_ALGORITHM, feature_row.tobytes()
         ).hexdigest()
 
+    # ------------------------------------------------------------------
+    # Live-serving convenience method
+    # ------------------------------------------------------------------
+
+    def run_on_closed_kline(self, kline: dict[str, Any]) -> Optional["SignalEvent"]:
+        """Handle a closed kline dict from :class:`~src.ingestion.ws_client.BinanceWebSocketClient`.
+
+        Checks whether the kline is marked as closed (``k.x == True``), fetches
+        the last ``inference_lookback_candles`` rows from
+        :attr:`EngineConfig.storage` for all required symbols, then delegates
+        to :meth:`run`.
+
+        This method is designed to be registered directly as a WS callback::
+
+            ws.subscribe_klines("dogeusdt", "1h", engine.run_on_closed_kline)
+
+        Args:
+            kline: Raw kline dict from the WebSocket stream.  Must have the
+                shape ``{"k": {"x": True/False, ...}}``.  Non-closed candles
+                (``x == False``) are silently ignored.
+
+        Returns:
+            :class:`~src.inference.signal.SignalEvent` on success, or *None*
+            if the candle was not closed, storage is unavailable, or an
+            unrecoverable error occurred (error is logged but not re-raised).
+        """
+        k: dict[str, Any] = kline.get("k", {})
+        if not k.get("x", False):
+            return None  # intermediate (not-yet-closed) kline update
+
+        if self._config.storage is None:
+            logger.warning("run_on_closed_kline: no storage configured — cannot fetch data")
+            return None
+
+        now_ms: int = int(time.time() * 1_000)
+        # Fetch slightly more than the lookback to absorb maintenance gaps
+        _extra: int = 50
+        lookback_ms_1h: int = (_extra + 500) * _MS_PER_1H
+        lookback_ms_4h: int = (_extra + 500) * (4 * _MS_PER_1H)
+        lookback_ms_1d: int = (_extra + 500) * (24 * _MS_PER_1H)
+
+        try:
+            doge_1h = self._config.storage.get_ohlcv(
+                "DOGEUSDT", "1h", now_ms - lookback_ms_1h, now_ms + 1
+            )
+            btc_1h = self._config.storage.get_ohlcv(
+                "BTCUSDT", "1h", now_ms - lookback_ms_1h, now_ms + 1
+            )
+            dogebtc_1h = self._config.storage.get_ohlcv(
+                "DOGEBTC", "1h", now_ms - lookback_ms_1h, now_ms + 1
+            )
+            funding = self._config.storage.get_funding_rates(
+                now_ms - lookback_ms_1h, now_ms + 1
+            )
+            doge_4h = self._config.storage.get_ohlcv(
+                "DOGEUSDT", "4h", now_ms - lookback_ms_4h, now_ms + 1
+            )
+            doge_1d = self._config.storage.get_ohlcv(
+                "DOGEUSDT", "1d", now_ms - lookback_ms_1d, now_ms + 1
+            )
+        except Exception as exc:  # noqa: BLE001
+            logger.error("run_on_closed_kline: storage fetch failed: {}", exc)
+            return None
+
+        try:
+            return self.run(doge_1h, btc_1h, dogebtc_1h, funding, doge_4h, doge_1d)
+        except Exception as exc:  # noqa: BLE001
+            logger.error("run_on_closed_kline: engine.run() failed: {}", exc)
+            return None
+
 
 # ---------------------------------------------------------------------------
 # Public interface

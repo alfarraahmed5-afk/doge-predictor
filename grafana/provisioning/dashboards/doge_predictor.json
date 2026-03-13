@@ -1,0 +1,207 @@
+{
+  "id": null,
+  "uid": "doge-predictor-main",
+  "title": "DOGE Predictor",
+  "tags": ["doge", "ml", "trading"],
+  "timezone": "utc",
+  "schemaVersion": 38,
+  "version": 1,
+  "refresh": "30s",
+  "time": { "from": "now-6h", "to": "now" },
+  "panels": [
+    {
+      "id": 1,
+      "title": "Inference Latency (p50/p95/p99)",
+      "type": "timeseries",
+      "gridPos": { "h": 6, "w": 12, "x": 0, "y": 0 },
+      "targets": [
+        {
+          "expr": "histogram_quantile(0.50, rate(doge_inference_latency_seconds_bucket[5m]))",
+          "legendFormat": "p50"
+        },
+        {
+          "expr": "histogram_quantile(0.95, rate(doge_inference_latency_seconds_bucket[5m]))",
+          "legendFormat": "p95"
+        },
+        {
+          "expr": "histogram_quantile(0.99, rate(doge_inference_latency_seconds_bucket[5m]))",
+          "legendFormat": "p99"
+        }
+      ],
+      "fieldConfig": {
+        "defaults": { "unit": "s", "thresholds": { "steps": [
+          { "color": "green", "value": null },
+          { "color": "yellow", "value": 0.25 },
+          { "color": "red", "value": 0.5 }
+        ]}}
+      }
+    },
+    {
+      "id": 2,
+      "title": "Current Regime",
+      "type": "stat",
+      "gridPos": { "h": 6, "w": 6, "x": 12, "y": 0 },
+      "targets": [
+        {
+          "expr": "doge_current_regime",
+          "legendFormat": "{{regime}}"
+        }
+      ],
+      "options": { "reduceOptions": { "calcs": ["lastNotNull"] }, "colorMode": "background" }
+    },
+    {
+      "id": 3,
+      "title": "WebSocket Connected",
+      "type": "stat",
+      "gridPos": { "h": 6, "w": 6, "x": 18, "y": 0 },
+      "targets": [
+        { "expr": "doge_ws_connected", "legendFormat": "Connected" }
+      ],
+      "options": {
+        "reduceOptions": { "calcs": ["lastNotNull"] },
+        "colorMode": "background",
+        "thresholds": { "steps": [
+          { "color": "red", "value": 0 },
+          { "color": "green", "value": 1 }
+        ]}
+      }
+    },
+    {
+      "id": 4,
+      "title": "Signals per Hour",
+      "type": "timeseries",
+      "gridPos": { "h": 6, "w": 12, "x": 0, "y": 6 },
+      "targets": [
+        {
+          "expr": "rate(doge_signals_total[1h]) * 3600",
+          "legendFormat": "{{signal}} / {{regime}}"
+        }
+      ]
+    },
+    {
+      "id": 5,
+      "title": "Prediction Count by Horizon",
+      "type": "timeseries",
+      "gridPos": { "h": 6, "w": 12, "x": 12, "y": 6 },
+      "targets": [
+        {
+          "expr": "rate(doge_prediction_count_total[1h]) * 3600",
+          "legendFormat": "{{horizon}} / {{regime}}"
+        }
+      ]
+    },
+    {
+      "id": 6,
+      "title": "DOGE-BTC 24h Correlation",
+      "type": "timeseries",
+      "gridPos": { "h": 6, "w": 8, "x": 0, "y": 12 },
+      "targets": [
+        { "expr": "doge_btc_corr_24h", "legendFormat": "BTC-DOGE corr 24h" }
+      ],
+      "fieldConfig": {
+        "defaults": {
+          "min": -1, "max": 1,
+          "thresholds": { "steps": [
+            { "color": "red", "value": -1 },
+            { "color": "yellow", "value": 0.3 },
+            { "color": "green", "value": 0.6 }
+          ]}
+        }
+      }
+    },
+    {
+      "id": 7,
+      "title": "Volume Ratio",
+      "type": "timeseries",
+      "gridPos": { "h": 6, "w": 8, "x": 8, "y": 12 },
+      "targets": [
+        { "expr": "doge_volume_ratio", "legendFormat": "volume / rolling 20-mean" }
+      ],
+      "fieldConfig": {
+        "defaults": {
+          "thresholds": { "steps": [
+            { "color": "green", "value": 0 },
+            { "color": "yellow", "value": 2 },
+            { "color": "red", "value": 3 }
+          ]}
+        }
+      }
+    },
+    {
+      "id": 8,
+      "title": "Funding Rate Z-Score",
+      "type": "timeseries",
+      "gridPos": { "h": 6, "w": 8, "x": 16, "y": 12 },
+      "targets": [
+        { "expr": "doge_funding_rate_zscore", "legendFormat": "funding z-score" }
+      ],
+      "fieldConfig": {
+        "defaults": {
+          "thresholds": { "steps": [
+            { "color": "green", "value": -2 },
+            { "color": "yellow", "value": 2 },
+            { "color": "red", "value": 3 }
+          ]}
+        }
+      }
+    },
+    {
+      "id": 9,
+      "title": "Feature Freshness (Candle Age)",
+      "type": "gauge",
+      "gridPos": { "h": 6, "w": 6, "x": 0, "y": 18 },
+      "targets": [
+        { "expr": "doge_feature_freshness_seconds", "legendFormat": "Candle age (s)" }
+      ],
+      "fieldConfig": {
+        "defaults": {
+          "unit": "s", "min": 0, "max": 7200,
+          "thresholds": { "steps": [
+            { "color": "green", "value": 0 },
+            { "color": "yellow", "value": 3600 },
+            { "color": "red", "value": 7200 }
+          ]}
+        }
+      }
+    },
+    {
+      "id": 10,
+      "title": "Equity Drawdown",
+      "type": "gauge",
+      "gridPos": { "h": 6, "w": 6, "x": 6, "y": 18 },
+      "targets": [
+        { "expr": "doge_equity_drawdown_pct", "legendFormat": "Drawdown" }
+      ],
+      "fieldConfig": {
+        "defaults": {
+          "unit": "percentunit", "min": 0, "max": 0.25,
+          "thresholds": { "steps": [
+            { "color": "green", "value": 0 },
+            { "color": "yellow", "value": 0.1 },
+            { "color": "red", "value": 0.2 }
+          ]}
+        }
+      }
+    },
+    {
+      "id": 11,
+      "title": "Inference Errors per Hour",
+      "type": "timeseries",
+      "gridPos": { "h": 6, "w": 12, "x": 12, "y": 18 },
+      "targets": [
+        {
+          "expr": "rate(doge_inference_errors_total[1h]) * 3600",
+          "legendFormat": "errors/h ({{step}})"
+        }
+      ],
+      "fieldConfig": {
+        "defaults": {
+          "thresholds": { "steps": [
+            { "color": "green", "value": 0 },
+            { "color": "red", "value": 1 }
+          ]}
+        }
+      }
+    }
+  ]
+}
