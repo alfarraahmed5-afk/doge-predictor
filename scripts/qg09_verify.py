@@ -332,7 +332,7 @@ def main() -> int:
     if args.in_memory_test:
         import tempfile  # noqa: PLC0415
 
-        with tempfile.TemporaryDirectory() as tmp:
+        with tempfile.TemporaryDirectory(ignore_cleanup_errors=True) as tmp:
             test_uri = f"sqlite:///{tmp}/mlflow_qg09.db"
             logger.info("QG-09 --in-memory-test: seeding MLflow at {}", test_uri)
             cand_id, prod_id = _seed_mlflow_test_runs(test_uri)
