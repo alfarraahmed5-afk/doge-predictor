@@ -49,3 +49,10 @@ Thumbs.db
 
 # Claude Code local session config (permissions, etc.)
 .claude/settings.local.json
+
+# Runtime database and lock files
+data/*.db
+data/*.lock
+
+# Logs (runtime output)
+logs/
