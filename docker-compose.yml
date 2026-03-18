@@ -91,11 +91,11 @@ services:
       - "8001:8001"   # Prometheus /metrics endpoint
     environment:
       # Database — overrides settings.yaml; connects to the timescaledb service
-      DOGE_DB_HOST: timescaledb
-      DOGE_DB_PORT: "5432"
-      DOGE_DB_NAME: doge_predictor
-      DOGE_DB_USER: doge_user
-      DOGE_DB_PASSWORD: ${POSTGRES_PASSWORD:-doge_password_change_me}
+      DB_HOST: timescaledb
+      DB_PORT: "5432"
+      DB_NAME: doge_predictor
+      DB_USER: doge_user
+      DB_PASSWORD: ${POSTGRES_PASSWORD:-doge_password_change_me}
       # Binance API keys (set in secrets.env)
       BINANCE_API_KEY: ${BINANCE_API_KEY:-}
       BINANCE_API_SECRET: ${BINANCE_API_SECRET:-}

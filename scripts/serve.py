@@ -378,6 +378,8 @@ def _make_prediction_backup_job(storage: Any) -> Any:
         except Exception as exc:  # noqa: BLE001
             logger.error("serve: prediction backup job failed — {}", exc)
 
+    return _job
+
 
 def _probe_db(storage: DogeStorage, health_status: HealthStatus) -> None:
     """Run a lightweight DB health probe and update *health_status*.

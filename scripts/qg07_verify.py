@@ -61,7 +61,6 @@ def _run_pytest() -> tuple[int, int, float]:
         sys.executable, "-m", "pytest", "tests/",
         "--tb=no", "-q",
         "--cov=src", "--cov-report=term-missing",
-        "--ignore=tests/unit/test_rest_client.py",
     ]
     result = subprocess.run(cmd, capture_output=True, text=True, cwd=str(_PROJECT_ROOT))
     output = result.stdout + result.stderr
