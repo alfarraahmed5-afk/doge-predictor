@@ -58,6 +58,8 @@ from src.monitoring.alerting import AlertManager  # noqa: E402
 from src.monitoring.health_check import HealthCheckServer, HealthStatus  # noqa: E402
 from src.processing.storage import DogeStorage  # noqa: E402
 from src.processing.validator import DataValidator  # noqa: E402
+from src.rl.curriculum import CurriculumManager  # noqa: E402
+from src.rl.predictor import MultiHorizonPredictor  # noqa: E402
 from src.rl.verifier import PredictionVerifier  # noqa: E402
 from src.utils.logger import configure_logging  # noqa: E402
 
@@ -128,6 +130,7 @@ def _make_kline_callback(
     engine: InferenceEngine,
     health_status: HealthStatus,
     alert_mgr: AlertManager,
+    multi_horizon_predictor: Optional["MultiHorizonPredictor"] = None,
 ) -> Any:
     """Return a kline callback bound to *engine* for *symbol*.
 
@@ -145,6 +148,9 @@ def _make_kline_callback(
         engine: Inference engine to invoke on candle close.
         health_status: Shared health state updated after each inference run.
         alert_mgr: Alert dispatcher for error notifications.
+        multi_horizon_predictor: Optional :class:`~src.rl.predictor.MultiHorizonPredictor`
+            that generates and stores multi-horizon RL prediction records after
+            each closed candle.  When ``None`` the RL prediction step is skipped.
 
     Returns:
         Callable that accepts a raw kline dict from the WebSocket.
@@ -201,6 +207,30 @@ def _make_kline_callback(
                 event.ensemble_prob,
                 latency,
             )
+
+            # RL Step 12b — multi-horizon prediction records (Phase 9)
+            if multi_horizon_predictor is not None:
+                try:
+                    direction = (
+                        1 if event.signal == "BUY"
+                        else -1 if event.signal == "SELL"
+                        else 0
+                    )
+                    multi_horizon_predictor.generate_and_store(
+                        open_time=event.open_time,
+                        close_price=event.close_price,
+                        predicted_direction=direction,
+                        ensemble_prob=event.ensemble_prob,
+                        lstm_prob=event.lstm_prob,
+                        xgb_prob=event.xgb_prob,
+                        regime_label=event.regime,
+                        model_version=event.model_version,
+                        now_ms=event.timestamp_ms,
+                    )
+                except Exception as exc:  # noqa: BLE001
+                    logger.warning(
+                        "serve: MultiHorizonPredictor error (non-fatal): {}", exc
+                    )
 
     return _callback
 
@@ -560,9 +590,29 @@ def main() -> int:
         )
 
     # ------------------------------------------------------------------
-    # RL verifier (Phase 9 stub)
+    # RL verifier + multi-horizon predictor (Phase 9)
     # ------------------------------------------------------------------
     verifier = PredictionVerifier(storage)
+
+    try:
+        from src.config import rl_config as _rl_cfg  # noqa: PLC0415
+        _curriculum = CurriculumManager(rl_cfg=_rl_cfg)
+        multi_horizon_predictor: Optional[MultiHorizonPredictor] = MultiHorizonPredictor(
+            storage=storage,
+            curriculum=_curriculum,
+            rl_cfg=_rl_cfg,
+        )
+        logger.info(
+            "serve: MultiHorizonPredictor initialised (active_horizons={})",
+            _curriculum.active_horizons(),
+        )
+    except Exception as exc:  # noqa: BLE001
+        logger.warning(
+            "serve: MultiHorizonPredictor could not be initialised — "
+            "RL prediction records disabled. Error: {}",
+            exc,
+        )
+        multi_horizon_predictor = None
 
     # ------------------------------------------------------------------
     # APScheduler
@@ -649,11 +699,14 @@ def main() -> int:
         try:
             ws_client = BinanceWebSocketClient()
 
-            # Primary DOGEUSDT stream — triggers inference on candle close
+            # Primary DOGEUSDT stream — triggers inference + RL prediction on candle close
             ws_client.subscribe_klines(
                 "dogeusdt",
                 doge_settings.primary_interval,
-                _make_kline_callback("dogeusdt", engine, health_status, alert_mgr),
+                _make_kline_callback(
+                    "dogeusdt", engine, health_status, alert_mgr,
+                    multi_horizon_predictor=multi_horizon_predictor,
+                ),
             )
 
             # BTCUSDT — data stored; no inference triggered from this stream

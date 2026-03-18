@@ -148,6 +148,7 @@ class XGBoostModel(AbstractBaseModel):
         X_val: np.ndarray,
         y_val: np.ndarray,
         feature_names: list[str] | None = None,
+        sample_weight: np.ndarray | None = None,
     ) -> dict[str, Any]:
         """Train the XGBoost model on the supplied fold data.
 
@@ -163,6 +164,11 @@ class XGBoostModel(AbstractBaseModel):
             feature_names: Optional list of feature column names.  Used for
                 ``get_feature_importance()`` and saved with the model.  If
                 *None*, generic names ``f0, f1, …`` are used.
+            sample_weight: Optional per-sample weight array, shape
+                ``(n_train,)``.  When supplied, passed to
+                :class:`xgb.DMatrix` as the ``weight`` argument — used by
+                the RL self-training loop to weight samples by
+                ``|reward_score|``.
 
         Returns:
             Metrics dict with keys:
@@ -210,6 +216,7 @@ class XGBoostModel(AbstractBaseModel):
             X_train,
             label=y_train,
             feature_names=self._feature_names,
+            weight=sample_weight,
         )
         dval = xgb.DMatrix(
             X_val,

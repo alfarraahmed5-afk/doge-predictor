@@ -202,6 +202,91 @@
           ]}
         }
       }
+    },
+    {
+      "id": 12,
+      "title": "RL Mean Reward by Horizon",
+      "type": "timeseries",
+      "gridPos": { "h": 6, "w": 12, "x": 0, "y": 24 },
+      "targets": [
+        {
+          "expr": "doge_rl_reward_mean",
+          "legendFormat": "{{horizon}}"
+        }
+      ],
+      "fieldConfig": {
+        "defaults": {
+          "thresholds": { "steps": [
+            { "color": "red", "value": -3 },
+            { "color": "yellow", "value": 0 },
+            { "color": "green", "value": 0.3 }
+          ]}
+        }
+      }
+    },
+    {
+      "id": 13,
+      "title": "RL Curriculum Stage",
+      "type": "stat",
+      "gridPos": { "h": 6, "w": 6, "x": 12, "y": 24 },
+      "targets": [
+        {
+          "expr": "doge_rl_curriculum_stage",
+          "legendFormat": "Stage"
+        }
+      ],
+      "options": {
+        "reduceOptions": { "calcs": ["lastNotNull"] },
+        "colorMode": "background",
+        "thresholds": { "steps": [
+          { "color": "blue", "value": 1 },
+          { "color": "green", "value": 2 },
+          { "color": "orange", "value": 3 },
+          { "color": "purple", "value": 4 }
+        ]}
+      }
+    },
+    {
+      "id": 14,
+      "title": "Replay Buffer Fill % by Horizon",
+      "type": "bargauge",
+      "gridPos": { "h": 6, "w": 6, "x": 18, "y": 24 },
+      "targets": [
+        {
+          "expr": "doge_rl_buffer_fill_pct * 100",
+          "legendFormat": "{{horizon}}"
+        }
+      ],
+      "fieldConfig": {
+        "defaults": {
+          "unit": "percent", "min": 0, "max": 100,
+          "thresholds": { "steps": [
+            { "color": "green", "value": 0 },
+            { "color": "yellow", "value": 60 },
+            { "color": "red", "value": 80 }
+          ]}
+        }
+      }
+    },
+    {
+      "id": 15,
+      "title": "RL Training Runs per Day",
+      "type": "timeseries",
+      "gridPos": { "h": 6, "w": 12, "x": 0, "y": 30 },
+      "targets": [
+        {
+          "expr": "increase(doge_rl_training_runs_total[24h])",
+          "legendFormat": "runs/day ({{trigger}})"
+        }
+      ],
+      "fieldConfig": {
+        "defaults": {
+          "thresholds": { "steps": [
+            { "color": "green", "value": 0 },
+            { "color": "yellow", "value": 3 }
+          ]}
+        }
+      }
     }
   ]
 }

@@ -21,7 +21,7 @@ import pytest
 from src.config import RLConfig, _load_yaml
 from src.processing.schemas import PredictionRecord, RewardResult
 from src.rl.replay_buffer import ReplayBuffer
-from src.rl.verifier import PredictionVerifier
+from src.rl.verifier import PredictionImmutabilityError, PredictionVerifier
 
 # ---------------------------------------------------------------------------
 # Fixtures
@@ -80,6 +80,7 @@ def _mock_storage(
     pending: list[PredictionRecord] | None = None,
     candle_df: pd.DataFrame | None = None,
     update_returns: bool = True,
+    prediction_by_id: PredictionRecord | None = None,
 ) -> MagicMock:
     """Build a storage mock with sensible defaults."""
     storage = MagicMock()
@@ -87,6 +88,16 @@ def _mock_storage(
     storage.get_ohlcv.return_value = candle_df if candle_df is not None else _make_candle()
     storage.update_prediction_outcome.return_value = update_returns
     storage.push_replay_buffer.return_value = True
+    # get_prediction_by_id defaults to returning the same record as in pending
+    # (pass prediction_by_id=<altered record> to simulate tampering)
+    if prediction_by_id is not None:
+        storage.get_prediction_by_id.return_value = prediction_by_id
+    else:
+        # Return the first pending record unchanged (no tampering)
+        if pending:
+            storage.get_prediction_by_id.return_value = pending[0]
+        else:
+            storage.get_prediction_by_id.return_value = None
     return storage
 
 
@@ -386,19 +397,22 @@ class TestReplayBufferPushMethod:
             buf.push(horizon="SHORT", regime="UNKNOWN_REGIME",
                      reward_score=1.0, model_version="v1", created_at=_NOW_MS)
 
-    def test_at_capacity_skips(self) -> None:
-        """Push returns False (skip) when max_size is reached."""
+    def test_at_capacity_evicts_and_inserts(self) -> None:
+        """At capacity: eviction fires, then insert succeeds (returns True)."""
         s = MagicMock()
-        # Simulate buffer at max size
         max_size = _RL_CFG.replay_buffer.max_size_per_horizon
         s.get_replay_sample.return_value = pd.DataFrame(
             [{"abs_reward": 0.5}] * max_size
         )
         s.push_replay_buffer.return_value = True
+        s.get_replay_regime_counts.return_value = {"TRENDING_BULL": max_size}
+        s.delete_oldest_non_protected_replay.return_value = True
         buf = ReplayBuffer(s, rl_cfg=_RL_CFG, seed=42)
         result = buf.push(horizon="SHORT", regime="TRENDING_BULL",
                           reward_score=1.0, model_version="v1", created_at=_NOW_MS)
-        assert result is False
+        # Eviction fires and insert succeeds
+        assert result is True
+        s.delete_oldest_non_protected_replay.assert_called_once()
 
     def test_fill_percentage_zero_on_empty(self) -> None:
         s = MagicMock()
@@ -586,3 +600,107 @@ class TestCurriculumManagerAdvancement:
         mgr = CurriculumManager(rl_cfg=_RL_CFG)
         with pytest.raises(ValueError, match="force_set_stage"):
             mgr.force_set_stage(99)
+
+
+# ---------------------------------------------------------------------------
+# MANDATORY — immutability guard tests
+# ---------------------------------------------------------------------------
+
+
+class TestImmutabilityGuard:
+    """MANDATORY: _assert_prediction_immutable() raises PredictionImmutabilityError
+    when any immutable prediction field differs between the in-memory record and
+    the stored record."""
+
+    def _tampered(self, original: PredictionRecord, **overrides: object) -> PredictionRecord:
+        """Return a copy of ``original`` with the given fields changed."""
+        data = original.model_dump()
+        data.update(overrides)
+        return PredictionRecord.model_validate(data)
+
+    def test_raises_when_predicted_price_modified(self) -> None:
+        """MANDATORY: guard raises if price_at_prediction differs in DB."""
+        record = _make_record(price_at_prediction=0.10)
+        # Simulate DB storing a different price_at_prediction (tampered record)
+        tampered = self._tampered(record, price_at_prediction=0.15)
+        s = _mock_storage(pending=[record], prediction_by_id=tampered)
+        v = _make_verifier(s)
+
+        with pytest.raises(PredictionImmutabilityError) as exc_info:
+            v.run_verification(as_of_ts=_NOW_MS)
+
+        err = exc_info.value
+        assert err.field == "price_at_prediction"
+        assert err.original_value == pytest.approx(0.10)
+        assert err.stored_value == pytest.approx(0.15)
+
+    def test_raises_when_predicted_direction_modified(self) -> None:
+        """Guard raises if predicted_direction differs in DB."""
+        record = _make_record(predicted_direction=1)
+        tampered = self._tampered(record, predicted_direction=-1)
+        s = _mock_storage(pending=[record], prediction_by_id=tampered)
+        v = _make_verifier(s)
+
+        with pytest.raises(PredictionImmutabilityError) as exc_info:
+            v.run_verification(as_of_ts=_NOW_MS)
+
+        assert exc_info.value.field == "predicted_direction"
+
+    def test_raises_when_horizon_label_modified(self) -> None:
+        """Guard raises if horizon_label differs in DB."""
+        record = _make_record(horizon_label="SHORT")
+        tampered = self._tampered(record, horizon_label="LONG")
+        s = _mock_storage(pending=[record], prediction_by_id=tampered)
+        v = _make_verifier(s)
+
+        with pytest.raises(PredictionImmutabilityError) as exc_info:
+            v.run_verification(as_of_ts=_NOW_MS)
+
+        assert exc_info.value.field == "horizon_label"
+
+    def test_no_error_when_record_unchanged(self) -> None:
+        """Guard passes when DB record matches in-memory record exactly."""
+        record = _make_record()
+        # Default mock returns the same record unchanged
+        s = _mock_storage(pending=[record])
+        v = _make_verifier(s)
+        result = v.run_verification(as_of_ts=_NOW_MS)
+        # Verification should succeed normally
+        assert result == 1
+
+    def test_passes_gracefully_when_db_returns_none(self) -> None:
+        """Guard is skipped (not raised) when get_prediction_by_id returns None."""
+        record = _make_record()
+        s = _mock_storage(pending=[record], prediction_by_id=None)
+        # Override so get_prediction_by_id returns None (row missing from DB)
+        s.get_prediction_by_id.return_value = None
+        v = _make_verifier(s)
+        # Should proceed to verification (guard skipped with warning)
+        result = v.run_verification(as_of_ts=_NOW_MS)
+        assert result == 1
+
+    def test_passes_gracefully_when_storage_raises(self) -> None:
+        """Guard is skipped when get_prediction_by_id raises a storage error."""
+        record = _make_record()
+        s = _mock_storage(pending=[record])
+        s.get_prediction_by_id.side_effect = RuntimeError("DB timeout")
+        v = _make_verifier(s)
+        # Should proceed to verification (guard skipped with warning)
+        result = v.run_verification(as_of_ts=_NOW_MS)
+        assert result == 1
+
+    def test_error_attributes_populated(self) -> None:
+        """PredictionImmutabilityError carries prediction_id, field, values."""
+        record = _make_record(price_at_prediction=0.10)
+        tampered = self._tampered(record, price_at_prediction=0.99)
+        s = _mock_storage(pending=[record], prediction_by_id=tampered)
+        v = _make_verifier(s)
+
+        with pytest.raises(PredictionImmutabilityError) as exc_info:
+            v.run_verification(as_of_ts=_NOW_MS)
+
+        err = exc_info.value
+        assert err.prediction_id == record.prediction_id
+        assert isinstance(err.field, str)
+        assert err.original_value is not None
+        assert err.stored_value is not None

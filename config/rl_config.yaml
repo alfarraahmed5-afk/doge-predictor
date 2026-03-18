@@ -74,30 +74,37 @@ curriculum:
     1:
       label: SHORT_ONLY
       horizons: [SHORT]
+      max_wait_days: 90              # Force advancement consideration after 90 days
       advancement_criteria:
         min_days: 14
         min_accuracy: 0.54           # 14-day rolling accuracy > 54%
         min_mean_reward: 0.30        # mean reward > 0.30
+        min_samples: 50              # Minimum verified predictions before advancing
 
     2:
       label: SHORT_MEDIUM
       horizons: [SHORT, MEDIUM]
+      max_wait_days: 120
       advancement_criteria:
         min_days: 21
         min_accuracy: 0.53           # 21-day rolling accuracy > 53%
         min_mean_reward: 0.20
+        min_samples: 75
 
     3:
       label: SHORT_MEDIUM_LONG
       horizons: [SHORT, MEDIUM, LONG]
+      max_wait_days: 180
       advancement_criteria:
         min_days: 28
         min_accuracy: 0.52           # 28-day rolling accuracy > 52%
         min_mean_reward: 0.15
+        min_samples: 100
 
     4:
       label: FULL
       horizons: [SHORT, MEDIUM, LONG, MACRO]
+      max_wait_days: 999             # Final stage — no advancement
       advancement_criteria: null    # Final stage — no advancement
 
   starting_stage: 1

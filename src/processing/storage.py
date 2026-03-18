@@ -282,7 +282,7 @@ class DogeStorage:
             Column("buffer_id", String(64), nullable=False, primary_key=True),
             Column("horizon_label", String(10), nullable=False),
             Column("regime", String(20), nullable=False),
-            Column("feature_vector", LargeBinary(), nullable=False),
+            Column("feature_vector", LargeBinary(), nullable=True),
             Column("predicted_price", Numeric(18, 8)),
             Column("actual_price", Numeric(18, 8)),
             Column("reward_score", Numeric(10, 6), nullable=False),
@@ -971,6 +971,139 @@ class DogeStorage:
         if not rows:
             return pd.DataFrame()
         return pd.DataFrame([dict(r) for r in rows])
+
+    def get_prediction_by_id(self, prediction_id: str) -> "PredictionRecord | None":
+        """Fetch a single prediction record by its primary key.
+
+        Used by the verifier's immutability guard to re-read the stored values
+        and confirm no prediction field has changed since insertion.
+
+        Args:
+            prediction_id: UUID string matching ``doge_predictions.prediction_id``.
+
+        Returns:
+            :class:`~src.processing.schemas.PredictionRecord` if found, else
+            ``None``.
+
+        Raises:
+            SQLAlchemyError: On any database error.
+        """
+        table = self._metadata.tables["doge_predictions"]
+        stmt = sa.select(table).where(table.c.prediction_id == prediction_id)
+
+        try:
+            with self._engine.connect() as conn:
+                row = conn.execute(stmt).mappings().first()
+        except SQLAlchemyError as exc:
+            logger.error("get_prediction_by_id failed (id={}): {}", prediction_id, exc)
+            raise
+
+        if row is None:
+            return None
+        try:
+            return PredictionRecord.model_validate(dict(row))
+        except Exception as exc:  # noqa: BLE001
+            logger.warning("get_prediction_by_id: parse error for {}: {}", prediction_id, exc)
+            return None
+
+    def get_replay_regime_counts(self, horizon: str) -> dict[str, int]:
+        """Return per-regime record counts for the given horizon.
+
+        Used by the replay buffer's eviction logic to identify protected regimes
+        (those below the ``min_per_regime`` threshold).
+
+        Args:
+            horizon: Horizon label — ``"SHORT"``, ``"MEDIUM"``, ``"LONG"``, or
+                ``"MACRO"``.
+
+        Returns:
+            Dict mapping regime label → row count. Only regimes with ≥ 1 row
+            are included.
+
+        Raises:
+            SQLAlchemyError: On any database error.
+        """
+        table = self._metadata.tables["doge_replay_buffer"]
+        stmt = (
+            sa.select(table.c.regime, sa.func.count().label("cnt"))
+            .where(table.c.horizon_label == horizon)
+            .group_by(table.c.regime)
+        )
+
+        try:
+            with self._engine.connect() as conn:
+                rows = conn.execute(stmt).mappings().all()
+        except SQLAlchemyError as exc:
+            logger.error(
+                "get_replay_regime_counts failed (horizon={}): {}",
+                horizon,
+                exc,
+            )
+            raise
+
+        return {str(row["regime"]): int(row["cnt"]) for row in rows}
+
+    def delete_oldest_non_protected_replay(
+        self,
+        horizon: str,
+        protected_regimes: set[str],
+    ) -> bool:
+        """Delete the oldest replay buffer row not in ``protected_regimes``.
+
+        If ALL rows belong to protected regimes the oldest row overall is
+        deleted as a last-resort fallback (buffer must not grow past capacity).
+
+        Args:
+            horizon: Horizon label to evict from.
+            protected_regimes: Set of regime labels whose rows must not be
+                evicted first (they are below the ``min_per_regime`` quota).
+
+        Returns:
+            ``True`` if a row was deleted; ``False`` if the buffer was empty.
+
+        Raises:
+            SQLAlchemyError: On any database error.
+        """
+        table = self._metadata.tables["doge_replay_buffer"]
+
+        def _find_oldest(conn: sa.Connection, extra_where: sa.ColumnElement | None) -> str | None:
+            base = sa.select(table.c.buffer_id).where(table.c.horizon_label == horizon)
+            if extra_where is not None:
+                base = base.where(extra_where)
+            row = conn.execute(base.order_by(table.c.created_at.asc()).limit(1)).mappings().first()
+            return str(row["buffer_id"]) if row else None
+
+        try:
+            with self._engine.begin() as conn:
+                # First try: evict from non-protected regimes
+                if protected_regimes:
+                    not_protected = ~table.c.regime.in_(list(protected_regimes))
+                else:
+                    not_protected = None
+                buffer_id = _find_oldest(conn, not_protected)
+
+                # Fallback: all regimes are protected — evict the overall oldest
+                if buffer_id is None:
+                    buffer_id = _find_oldest(conn, None)
+
+                if buffer_id is None:
+                    return False
+
+                conn.execute(sa.delete(table).where(table.c.buffer_id == buffer_id))
+        except SQLAlchemyError as exc:
+            logger.error(
+                "delete_oldest_non_protected_replay failed (horizon={}): {}",
+                horizon,
+                exc,
+            )
+            raise
+
+        logger.debug(
+            "delete_oldest_non_protected_replay: evicted buffer_id={} (horizon={})",
+            buffer_id,
+            horizon,
+        )
+        return True
 
     # -----------------------------------------------------------------------
     # Misc

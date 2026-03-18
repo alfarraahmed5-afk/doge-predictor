@@ -33,7 +33,10 @@ Usage::
 
 from __future__ import annotations
 
+import json
+import time
 import uuid
+from pathlib import Path
 from typing import Any, Final
 
 import numpy as np
@@ -88,6 +91,34 @@ class ReplayBuffer:
         logger.info("ReplayBuffer initialised (counts={})", self._counts)
 
     # ------------------------------------------------------------------
+    # Feature-vector serialisation helpers
+    # ------------------------------------------------------------------
+
+    @staticmethod
+    def serialize_feature_vector(arr: np.ndarray) -> bytes:
+        """Serialise a 1-D float64 numpy array to raw bytes.
+
+        Args:
+            arr: Feature vector — must be 1-D; will be cast to float64.
+
+        Returns:
+            Raw bytes representation (``arr.astype(float64).tobytes()``).
+        """
+        return arr.astype(np.float64).tobytes()
+
+    @staticmethod
+    def deserialize_feature_vector(data: bytes) -> np.ndarray:
+        """Deserialise raw bytes back to a 1-D float64 numpy array.
+
+        Args:
+            data: Bytes produced by :meth:`serialize_feature_vector`.
+
+        Returns:
+            1-D numpy array of dtype float64.
+        """
+        return np.frombuffer(data, dtype=np.float64)
+
+    # ------------------------------------------------------------------
     # Public API
     # ------------------------------------------------------------------
 
@@ -100,9 +131,15 @@ class ReplayBuffer:
         created_at: int,
         predicted_price: float | None = None,
         actual_price: float | None = None,
-        feature_vector: bytes | None = None,
+        feature_vector: "bytes | np.ndarray | None" = None,
     ) -> bool:
         """Append one verified experience to the buffer.
+
+        When the buffer is full (``count >= max_size``), the oldest row NOT
+        belonging to a *protected* regime is evicted before inserting.
+        A regime is protected when its row count is at or below
+        ``min_per_regime`` — this prevents rare-regime samples from being
+        wiped out by dominant regimes.
 
         Args:
             horizon: Prediction horizon label.
@@ -112,11 +149,13 @@ class ReplayBuffer:
             created_at: Verification timestamp, UTC epoch milliseconds.
             predicted_price: Optional price at prediction time.
             actual_price: Optional actual close price at maturity.
-            feature_vector: Optional serialised feature bytes.
+            feature_vector: Optional feature data — either pre-serialised
+                ``bytes`` or a numpy ndarray (serialised automatically via
+                :meth:`serialize_feature_vector`).
 
         Returns:
-            ``True`` if the record was pushed; ``False`` if skipped due to
-            capacity limit.
+            ``True`` if the record was pushed successfully; ``False`` if a
+            storage error prevented the insert.
 
         Raises:
             ValueError: If ``horizon`` or ``regime`` is invalid.
@@ -126,14 +165,16 @@ class ReplayBuffer:
         if regime not in _VALID_REGIMES:
             raise ValueError(f"Invalid regime '{regime}'. Must be one of {sorted(_VALID_REGIMES)}.")
 
+        # Evict one row if at capacity (respecting min-per-regime quota)
         if self._counts[horizon] >= self._max_size:
-            logger.warning(
-                "ReplayBuffer: horizon={} at capacity ({}/{}); skipping push",
-                horizon,
-                self._counts[horizon],
-                self._max_size,
-            )
-            return False
+            self._evict_one(horizon)
+
+        # Serialise numpy arrays if needed
+        fv_bytes: bytes | None
+        if isinstance(feature_vector, np.ndarray):
+            fv_bytes = self.serialize_feature_vector(feature_vector)
+        else:
+            fv_bytes = feature_vector
 
         record: dict[str, Any] = {
             "buffer_id": str(uuid.uuid4()),
@@ -147,8 +188,8 @@ class ReplayBuffer:
             record["predicted_price"] = predicted_price
         if actual_price is not None:
             record["actual_price"] = actual_price
-        if feature_vector is not None:
-            record["feature_vector"] = feature_vector
+        if fv_bytes is not None:
+            record["feature_vector"] = fv_bytes
 
         try:
             self._storage.push_replay_buffer(record)
@@ -279,9 +320,162 @@ class ReplayBuffer:
             raise ValueError(f"Invalid horizon '{horizon}'.")
         return self._counts[horizon]
 
+    def get_regime_counts(self, horizon: str) -> dict[str, int]:
+        """Return per-regime record counts for the given horizon.
+
+        Queries the database directly (not the in-memory approximation) so
+        the result is always current.
+
+        Args:
+            horizon: Prediction horizon label.
+
+        Returns:
+            Dict mapping regime label → row count.  Empty dict on error.
+
+        Raises:
+            ValueError: If ``horizon`` is invalid.
+        """
+        if horizon not in _VALID_HORIZONS:
+            raise ValueError(f"Invalid horizon '{horizon}'.")
+        try:
+            return self._storage.get_replay_regime_counts(horizon)
+        except Exception as exc:  # noqa: BLE001
+            logger.warning("get_regime_counts failed (horizon={}): {}", horizon, exc)
+            return {}
+
+    def get_prioritised_sample(self, horizon: str, n: int) -> pd.DataFrame:
+        """Draw a prioritised sample by physically duplicating high-reward rows.
+
+        High-priority rows (``abs_reward >= priority_threshold``) are
+        concatenated ``priority_oversample`` times into an expanded pool before
+        random sampling, giving them exactly ``priority_oversample``× the
+        representation of ordinary rows.
+
+        Args:
+            horizon: Prediction horizon label.
+            n: Desired batch size.
+
+        Returns:
+            :class:`pandas.DataFrame` with up to ``n`` rows, with
+            ``feature_vector`` columns deserialised to ``np.ndarray`` objects
+            where data is present.  May be empty.
+
+        Raises:
+            ValueError: If ``horizon`` is invalid or ``n < 1``.
+        """
+        if horizon not in _VALID_HORIZONS:
+            raise ValueError(f"Invalid horizon '{horizon}'.")
+        if n < 1:
+            raise ValueError(f"n must be >= 1, got {n}.")
+
+        pool = self._storage.get_replay_sample(horizon, n * self._priority_oversample * 2)
+        if pool.empty:
+            return pd.DataFrame()
+
+        if "abs_reward" in pool.columns:
+            abs_reward = pool["abs_reward"].to_numpy(dtype=float)
+            high_mask = abs_reward >= self._priority_threshold
+            high_prio = pool[high_mask]
+            low_prio = pool[~high_mask]
+            # Physically duplicate high-priority rows priority_oversample times
+            expanded = pd.concat(
+                [high_prio] * self._priority_oversample + [low_prio],
+                ignore_index=True,
+            )
+        else:
+            expanded = pool
+
+        actual_n = min(n, len(expanded))
+        indices = self._rng.choice(len(expanded), size=actual_n, replace=True)
+        result = expanded.iloc[indices].reset_index(drop=True)
+
+        # Deserialise feature_vector bytes back to numpy arrays
+        if "feature_vector" in result.columns:
+            result = result.copy()
+            result["feature_vector"] = result["feature_vector"].apply(
+                lambda v: self.deserialize_feature_vector(v) if isinstance(v, (bytes, memoryview)) else v
+            )
+
+        return result
+
+    def checkpoint(self, path: Path) -> None:
+        """Persist the buffer's in-memory state to disk.
+
+        Writes a JSON file to ``path`` containing current per-horizon counts
+        and a snapshot timestamp.  The database remains the authoritative store;
+        this is a lightweight diagnostic snapshot used for monitoring and
+        operator inspection.
+
+        Args:
+            path: Directory where the checkpoint file will be written.
+                Created (with parents) if it does not exist.
+
+        Raises:
+            OSError: If the directory cannot be created or the file cannot be
+                written.
+        """
+        path = Path(path)
+        path.mkdir(parents=True, exist_ok=True)
+
+        snapshot_ts = int(time.time() * 1000)
+        state: dict[str, Any] = {
+            "snapshot_ts_ms": snapshot_ts,
+            "counts": dict(self._counts),
+            "max_size_per_horizon": self._max_size,
+            "priority_threshold": self._priority_threshold,
+            "priority_oversample": self._priority_oversample,
+            "min_per_regime": self._min_per_regime,
+        }
+
+        checkpoint_file = path / f"replay_buffer_{snapshot_ts}.json"
+        with checkpoint_file.open("w", encoding="utf-8") as fh:
+            json.dump(state, fh, indent=2)
+
+        logger.info(
+            "ReplayBuffer.checkpoint: saved to {} (counts={})",
+            checkpoint_file,
+            self._counts,
+        )
+
     # ------------------------------------------------------------------
     # Private helpers
     # ------------------------------------------------------------------
+
+    def _evict_one(self, horizon: str) -> None:
+        """Evict the oldest replay buffer row for ``horizon``.
+
+        Regimes with row counts at or below ``min_per_regime`` are *protected*
+        and will not be evicted unless ALL regimes are at or below the quota
+        (last-resort fallback so the buffer cannot grow past capacity).
+
+        Args:
+            horizon: Horizon whose buffer has reached capacity.
+        """
+        try:
+            regime_counts = self._storage.get_replay_regime_counts(horizon)
+        except Exception as exc:  # noqa: BLE001
+            logger.warning("_evict_one: could not fetch regime counts: {}; skipping eviction", exc)
+            return
+
+        protected = {
+            r for r, cnt in regime_counts.items() if cnt <= self._min_per_regime
+        }
+
+        try:
+            evicted = self._storage.delete_oldest_non_protected_replay(horizon, protected)
+        except Exception as exc:  # noqa: BLE001
+            logger.warning("_evict_one: delete failed: {}", exc)
+            return
+
+        if evicted:
+            self._counts[horizon] = max(0, self._counts[horizon] - 1)
+            logger.debug(
+                "_evict_one: evicted 1 row from horizon={} (protected={})",
+                horizon,
+                protected,
+            )
+        else:
+            logger.warning("_evict_one: no row evicted for horizon={}", horizon)
 
     def _sync_counts(self) -> None:
         """Sync in-memory counts from the database.

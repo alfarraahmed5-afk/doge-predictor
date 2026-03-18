@@ -454,6 +454,7 @@ class CurriculumStageAdvancement(BaseModel):
     min_days: int
     min_accuracy: float
     min_mean_reward: float
+    min_samples: int = 50
 
 
 class CurriculumStage(BaseModel):
@@ -462,6 +463,7 @@ class CurriculumStage(BaseModel):
     label: str
     horizons: list[str]
     advancement_criteria: CurriculumStageAdvancement | None = None
+    max_wait_days: int = 90
 
 
 class CurriculumSettings(BaseModel):

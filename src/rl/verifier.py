@@ -46,7 +46,7 @@ from src.processing.storage import DogeStorage
 from src.rl.replay_buffer import ReplayBuffer
 from src.rl.reward import compute_reward
 
-__all__ = ["PredictionVerifier"]
+__all__ = ["PredictionVerifier", "PredictionImmutabilityError"]
 
 # ---------------------------------------------------------------------------
 # Constants
@@ -55,6 +55,54 @@ __all__ = ["PredictionVerifier"]
 _INTERVAL_MS: Final[int] = 3_600_000  # 1-hour candle in milliseconds
 _SYMBOL: Final[str] = "DOGEUSDT"
 _INTERVAL: Final[str] = "1h"
+
+# Fields that must never change after a prediction row is inserted.
+_IMMUTABLE_FIELDS: Final[tuple[str, ...]] = (
+    "predicted_direction",
+    "price_at_prediction",
+    "confidence_score",
+    "horizon_label",
+    "horizon_candles",
+    "regime_label",
+    "symbol",
+    "model_version",
+)
+
+
+# ---------------------------------------------------------------------------
+# Exceptions
+# ---------------------------------------------------------------------------
+
+
+class PredictionImmutabilityError(RuntimeError):
+    """Raised when a prediction record's immutable fields have been modified.
+
+    This indicates either a bug in the write path or deliberate tampering.
+    The verifier will refuse to write outcomes to a corrupted record.
+
+    Attributes:
+        prediction_id: UUID of the corrupted record.
+        field: Name of the first field found to differ.
+        original_value: Value from the in-memory record (as fetched by
+            ``get_matured_unverified``).
+        stored_value: Value currently in the database.
+    """
+
+    def __init__(
+        self,
+        prediction_id: str,
+        field: str,
+        original_value: object,
+        stored_value: object,
+    ) -> None:
+        super().__init__(
+            f"Immutable field '{field}' changed for prediction_id={prediction_id}: "
+            f"{original_value!r} → {stored_value!r}"
+        )
+        self.prediction_id = prediction_id
+        self.field = field
+        self.original_value = original_value
+        self.stored_value = stored_value
 
 
 class PredictionVerifier:
@@ -120,6 +168,9 @@ class PredictionVerifier:
                 ok = self._verify_single(record, now_ms)
                 if ok:
                     n_verified += 1
+            except PredictionImmutabilityError:
+                # Data corruption — propagate immediately so the caller can alert
+                raise
             except Exception as exc:  # noqa: BLE001
                 logger.error(
                     "run_verification: unhandled error for prediction_id={}: {}",
@@ -148,6 +199,10 @@ class PredictionVerifier:
         Returns:
             ``True`` if the record was successfully verified and written;
             ``False`` if it was skipped (OHLCV missing, interpolated, etc.).
+
+        Raises:
+            PredictionImmutabilityError: If an immutable prediction field has
+                been modified since insertion.
         """
         # Safety: never process a candle that hasn't closed yet
         if record.target_open_time > now_ms - _INTERVAL_MS:
@@ -159,6 +214,9 @@ class PredictionVerifier:
                 record.prediction_id,
             )
             return False
+
+        # Immutability check — re-read from DB and compare prediction fields
+        self._assert_prediction_immutable(record)
 
         # Fetch the actual candle at target_open_time
         actual_candle = self._fetch_target_candle(record)
@@ -234,6 +292,60 @@ class PredictionVerifier:
             reward_result.reward_score,
         )
         return True
+
+    def _assert_prediction_immutable(self, original: PredictionRecord) -> None:
+        """Verify that no immutable prediction field has changed since insertion.
+
+        Re-reads the prediction row from the database and compares every field
+        listed in ``_IMMUTABLE_FIELDS`` against the in-memory ``original``
+        record.  Raises :class:`PredictionImmutabilityError` on the first
+        discrepancy found.
+
+        If the row cannot be fetched (storage error or row not found) the
+        check is skipped with a warning — the verifier still proceeds.
+
+        Args:
+            original: The prediction record as returned by
+                ``DogeStorage.get_matured_unverified()``.
+
+        Raises:
+            PredictionImmutabilityError: If any immutable field differs.
+        """
+        try:
+            fresh = self._storage.get_prediction_by_id(original.prediction_id)
+        except Exception as exc:  # noqa: BLE001
+            logger.warning(
+                "_assert_prediction_immutable: could not re-fetch prediction_id={}: {}; "
+                "skipping immutability check",
+                original.prediction_id,
+                exc,
+            )
+            return
+
+        if fresh is None:
+            logger.warning(
+                "_assert_prediction_immutable: prediction_id={} not found in DB; "
+                "skipping immutability check",
+                original.prediction_id,
+            )
+            return
+
+        for field in _IMMUTABLE_FIELDS:
+            original_val = getattr(original, field)
+            fresh_val = getattr(fresh, field)
+            if original_val != fresh_val:
+                raise PredictionImmutabilityError(
+                    prediction_id=original.prediction_id,
+                    field=field,
+                    original_value=original_val,
+                    stored_value=fresh_val,
+                )
+
+        logger.debug(
+            "_assert_prediction_immutable: prediction_id={} OK — all {} fields unchanged",
+            original.prediction_id,
+            len(_IMMUTABLE_FIELDS),
+        )
 
     def _fetch_target_candle(
         self, record: PredictionRecord
