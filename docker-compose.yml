@@ -35,8 +35,6 @@ volumes:
     driver: local
   prometheus_data:
     driver: local
-  models_data:
-    driver: local
   logs_data:
     driver: local
 
@@ -109,7 +107,7 @@ services:
     env_file:
       - config/secrets.env
     volumes:
-      - models_data:/app/models
+      - ./models:/app/models
       - logs_data:/app/logs
     command:
       - python

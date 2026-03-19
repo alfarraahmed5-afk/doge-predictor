@@ -63,3 +63,6 @@ apscheduler>=3.10
 
 # Environment variable loading
 python-dotenv>=1.0
+
+# WebSocket client (required by BinanceWebSocketClient)
+websocket-client>=1.6

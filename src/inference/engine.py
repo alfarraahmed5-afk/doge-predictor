@@ -255,9 +255,8 @@ class InferenceEngine:
 
         # Scaler (Step 5)
         self._scaler: FoldScaler = FoldScaler()
-        scaler_path = models_dir / "scaler.pkl"
-        self._scaler.load(scaler_path)
-        logger.info("InferenceEngine: scaler loaded from {}", scaler_path)
+        self._scaler.load(models_dir)
+        logger.info("InferenceEngine: scaler loaded from {}", models_dir / "scaler.pkl")
 
         # LSTM model (Step 6)
         self._lstm: LSTMModel = LSTMModel(regime_cfg=self._regime_cfg)
