@@ -966,7 +966,7 @@ def _build_feature_matrix_from_storage(
         dogebtc_1h=dogebtc_df,
         doge_4h=doge_4h,
         doge_1d=doge_1d,
-        funding_df=funding_df,
+        funding=funding_df,
         min_rows_override=100,
     )
 

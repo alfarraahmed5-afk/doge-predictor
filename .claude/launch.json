@@ -4,8 +4,14 @@
     {
       "name": "inference-server",
       "runtimeExecutable": ".venv/Scripts/python",
-      "runtimeArgs": ["scripts/serve.py"],
-      "port": 8000
+      "runtimeArgs": [
+        "scripts/serve.py",
+        "--db-path", "data/doge_data.db",
+        "--health-port", "8002",
+        "--metrics-port", "8003"
+      ],
+      "port": 8080,
+      "autoPort": true
     },
     {
       "name": "mlflow-ui",

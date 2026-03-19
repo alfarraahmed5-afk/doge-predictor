@@ -7,7 +7,7 @@ Starts the live DOGE price-prediction inference engine:
     closed candle via :meth:`~src.inference.engine.InferenceEngine.run_on_closed_kline`
   * :class:`~src.monitoring.health_check.HealthCheckServer` on ``--health-port`` (default 8000)
   * Prometheus metrics HTTP endpoint on ``--metrics-port`` (default 8001)
-  * Trading dashboard UI on ``--dashboard-port`` (default 8080) via FastAPI + uvicorn
+  * Trading dashboard UI on ``--dashboard-port`` (default 8090) via FastAPI + uvicorn
   * APScheduler background jobs:
 
     - ``:01`` past every hour — :class:`~src.ingestion.scheduler.IncrementalScheduler`
@@ -491,8 +491,8 @@ def _build_parser() -> argparse.ArgumentParser:
     parser.add_argument(
         "--dashboard-port",
         type=int,
-        default=int(os.environ.get("DASHBOARD_PORT", "8080")),
-        help="Port for the trading dashboard UI (default: 8080)",
+        default=int(os.environ.get("DASHBOARD_PORT", os.environ.get("PORT", "8090"))),
+        help="Port for the trading dashboard UI (default: 8090; changed from 8080 to avoid Docker Desktop collision)",
     )
     parser.add_argument(
         "--no-dashboard",
@@ -578,42 +578,48 @@ def main() -> int:
     # ------------------------------------------------------------------
     if not args.no_dashboard:
         try:
-            import uvicorn  # noqa: PLC0415
-            from src.dashboard.app import (  # noqa: PLC0415
-                app as _dash_app,
-                init_dashboard,
-                init_dashboard_pg,
-            )
+            import subprocess  # noqa: PLC0415
 
-            if args.db_path:
-                init_dashboard(Path(args.db_path))
-            else:
-                # TimescaleDB mode — build connection URL from env / settings
-                _db_cfg = cfg.database
-                _pg_url = (
-                    f"postgresql+psycopg2://{_db_cfg.user}:{_db_cfg.password}"
-                    f"@{_db_cfg.host}:{_db_cfg.port}/{_db_cfg.name}"
-                )
-                init_dashboard_pg(_pg_url)
-                logger.info("serve: dashboard connected to TimescaleDB")
-
+            # Build the subprocess command.  Running the dashboard in a
+            # separate subprocess guarantees a clean import of app.py with
+            # all routes registered, avoiding sys.modules cache collisions
+            # that occur when the main serve.py process has already imported
+            # heavy packages (torch, xgboost, etc.) that share import locks.
             _dashboard_port = args.dashboard_port
-
-            def _start_dashboard() -> None:
-                uvicorn.run(
-                    _dash_app,
-                    host="0.0.0.0",
-                    port=_dashboard_port,
-                    log_level="error",
-                    access_log=False,
-                )
-
-            _dash_thread = threading.Thread(
-                target=_start_dashboard, name="dashboard", daemon=True
+            _dash_cmd = [
+                sys.executable,
+                "-c",
+                (
+                    "import sys, asyncio\n"
+                    "sys.path.insert(0, '.')\n"
+                    "from pathlib import Path\n"
+                    "from src.dashboard.app import app, init_dashboard, init_dashboard_pg\n"
+                    + (
+                        f"init_dashboard(Path(r'{args.db_path}'))\n"
+                        if args.db_path
+                        else (
+                            "from src.config import get_settings\n"
+                            "cfg=get_settings()\n"
+                            "db=cfg.database\n"
+                            "init_dashboard_pg(f'postgresql+psycopg2://{db.user}:{db.password}@{db.host}:{db.port}/{db.name}')\n"
+                        )
+                    )
+                    + f"from uvicorn import Config, Server\n"
+                    f"config=Config(app=app,host='0.0.0.0',port={_dashboard_port},log_level='error',access_log=False)\n"
+                    f"loop=asyncio.new_event_loop()\n"
+                    f"asyncio.set_event_loop(loop)\n"
+                    f"loop.run_until_complete(Server(config=config).serve())\n"
+                ),
+            ]
+            _dash_proc = subprocess.Popen(
+                _dash_cmd,
+                stdout=subprocess.DEVNULL,
+                stderr=subprocess.DEVNULL,
             )
-            _dash_thread.start()
             logger.info(
-                "serve: trading dashboard started at http://localhost:{}", _dashboard_port
+                "serve: trading dashboard started at http://localhost:{} (pid {})",
+                _dashboard_port,
+                _dash_proc.pid,
             )
         except Exception as exc:
             logger.warning(
@@ -747,6 +753,35 @@ def main() -> int:
                 "serve: APScheduler started "
                 "(5 jobs: incremental, verifier, retrain, round_review, backup)"
             )
+
+            # Cold-start: refresh DB then run inference so the dashboard shows a
+            # prediction immediately instead of waiting up to 60 min for candle close.
+            if engine is not None:
+                _cs_sched = sched_obj
+                _cs_engine = engine
+
+                def _cold_start() -> None:
+                    import time as _time  # noqa: PLC0415
+                    _time.sleep(3)  # let uvicorn and WS settle
+                    try:
+                        logger.info("serve: cold-start — refreshing DB candles…")
+                        _cs_sched.run_once()
+                    except Exception as _exc:
+                        logger.warning("serve: cold-start DB refresh failed: {}", _exc)
+                    try:
+                        evt = _cs_engine.run_on_closed_kline({"k": {"x": True}})
+                        if evt:
+                            logger.info(
+                                "serve: cold-start inference → {} (regime={}, conf={:.3f})",
+                                evt.signal, evt.regime, evt.confidence_threshold,
+                            )
+                        else:
+                            logger.warning("serve: cold-start inference returned None")
+                    except Exception as _exc:
+                        logger.warning("serve: cold-start inference failed: {}", _exc)
+
+                threading.Thread(target=_cold_start, name="cold-start", daemon=True).start()
+
         except Exception as exc:
             logger.error("serve: APScheduler startup failed: {}", exc)
             scheduler = None

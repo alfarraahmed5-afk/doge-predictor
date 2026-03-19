@@ -72,12 +72,15 @@ _LOCK_TIMEOUT_S: int = 30
 
 #: Column dtypes returned by get_ohlcv / get_funding_rates (for Pandas).
 _OHLCV_NUMERIC_COLS: tuple[str, ...] = (
+    "open_time",
+    "close_time",
     "open",
     "high",
     "low",
     "close",
     "volume",
     "quote_volume",
+    "num_trades",
 )
 
 #: Mapping from interval string to table name.
@@ -588,7 +591,12 @@ class DogeStorage:
 
         if not rows:
             return pd.DataFrame()
-        return pd.DataFrame([dict(r) for r in rows])
+        df = pd.DataFrame([dict(r) for r in rows])
+        # Coerce numeric columns — SQLAlchemy may return Decimal objects
+        for col in ("funding_rate", "mark_price", "timestamp_ms"):
+            if col in df.columns:
+                df[col] = pd.to_numeric(df[col], errors="coerce")
+        return df
 
     # -----------------------------------------------------------------------
     # Regime labels

@@ -39,7 +39,7 @@ import numpy as np
 import pandas as pd
 from loguru import logger
 
-from src.config import WalkForwardSettings
+from src.config import WalkForwardSettings, doge_settings as _ds_global
 from src.features.pipeline import FeaturePipeline, _PASSTHROUGH_COLS
 from src.regimes.classifier import DogeRegimeClassifier
 from src.training.trainer import ModelTrainer, TrainingResult
@@ -263,6 +263,96 @@ def build_in_memory_data() -> tuple[pd.DataFrame, pd.Series]:
     return feature_df, regime_labels
 
 
+def build_from_db(db_path: Path) -> tuple[pd.DataFrame, pd.Series]:
+    """Load real OHLCV data from a SQLite DB and build the full feature matrix.
+
+    Uses the full training era (post-2022-01-01) from the bootstrapped database.
+    This is the production training path — no synthetic data.
+
+    Args:
+        db_path: Path to ``doge_data.db`` (SQLite).
+
+    Returns:
+        Tuple of ``(feature_df, regime_labels)`` ready for ModelTrainer.
+    """
+    import time as _time  # noqa: PLC0415
+
+    from sqlalchemy import create_engine  # noqa: PLC0415
+
+    from src.config import get_settings  # noqa: PLC0415
+    from src.processing.storage import DogeStorage  # noqa: PLC0415
+
+    logger.info("train.py: loading real data from {}", db_path)
+
+    engine = create_engine(f"sqlite:///{db_path}", future=True)
+    settings = get_settings()
+    storage = DogeStorage(settings, engine=engine)
+
+    # Use full training-era history: 2022-01-01 → now
+    _TRAINING_START_MS: int = 1_640_995_200_000  # 2022-01-01 00:00 UTC
+    end_ms = int(_time.time() * 1_000)
+
+    logger.info("train.py: fetching OHLCV from {} symbols ...", "DOGEUSDT/BTCUSDT/DOGEBTC")
+    doge_1h = storage.get_ohlcv("DOGEUSDT", "1h", _TRAINING_START_MS, end_ms)
+    btc_1h  = storage.get_ohlcv("BTCUSDT",  "1h", _TRAINING_START_MS, end_ms)
+    dogebtc = storage.get_ohlcv("DOGEBTC",  "1h", _TRAINING_START_MS, end_ms)
+    doge_4h = storage.get_ohlcv("DOGEUSDT", "4h", _TRAINING_START_MS, end_ms)
+    doge_1d = storage.get_ohlcv("DOGEUSDT", "1d", _TRAINING_START_MS, end_ms)
+    funding = storage.get_funding_rates(_TRAINING_START_MS, end_ms)
+
+    if doge_1h is None or len(doge_1h) == 0:
+        raise RuntimeError("build_from_db: no DOGEUSDT 1h data found in DB")
+
+    # Assign era column (walk-forward CV requires it)
+    for df in (doge_1h, btc_1h, dogebtc, doge_4h, doge_1d):
+        if df is not None and "era" not in df.columns:
+            df["era"] = "training"
+
+    logger.info(
+        "train.py: loaded {} DOGE 1h rows, {} BTC, {} DOGEBTC, {} 4h, {} 1d, {} funding",
+        len(doge_1h),
+        len(btc_1h) if btc_1h is not None else 0,
+        len(dogebtc) if dogebtc is not None else 0,
+        len(doge_4h) if doge_4h is not None else 0,
+        len(doge_1d) if doge_1d is not None else 0,
+        len(funding) if funding is not None else 0,
+    )
+
+    # Classify regimes on full 1h series (uses BTC for DECOUPLED detection)
+    clf = DogeRegimeClassifier()
+    regime_series: pd.Series = clf.classify(doge_1h, btc_df=btc_1h)
+    regime_series.index = doge_1h["open_time"].values
+    dist = clf.get_regime_distribution(regime_series)
+    logger.info("train.py: regime distribution: {}", {k: f"{v:.2%}" for k, v in dist.items()})
+
+    # Build full feature matrix (no min_rows_override — use production default)
+    pipe = FeaturePipeline(run_id="train_real")
+    feature_df = pipe.compute_all_features(
+        doge_1h=doge_1h,
+        btc_1h=btc_1h,
+        dogebtc_1h=dogebtc,
+        funding=funding,
+        doge_4h=doge_4h,
+        doge_1d=doge_1d,
+        regimes=regime_series,
+    )
+    logger.info(
+        "train.py: feature matrix {} rows x {} cols after warmup dropna",
+        len(feature_df),
+        len(feature_df.columns),
+    )
+
+    # Align regime labels to feature_df index (open_time-keyed)
+    regime_map: dict[int, str] = dict(zip(regime_series.index, regime_series.values))
+    regime_labels = pd.Series(
+        [str(regime_map.get(int(t), "RANGING_LOW_VOL")) for t in feature_df["open_time"]],
+        index=feature_df.index,
+        name="regime_label",
+    )
+
+    return feature_df, regime_labels
+
+
 def load_features_from_disk(
     features_dir: Path,
 ) -> tuple[pd.DataFrame, pd.Series]:
@@ -410,6 +500,10 @@ def _parse_args(argv: list[str] | None = None) -> argparse.Namespace:
         description="Train DOGE prediction models (full pipeline)"
     )
     parser.add_argument(
+        "--db-path", type=Path, default=None,
+        help="Path to SQLite doge_data.db — loads real bootstrapped data directly",
+    )
+    parser.add_argument(
         "--features-dir", type=Path, default=None,
         help="Directory with features_*.parquet files (default: data/features/primary/)",
     )
@@ -475,6 +569,9 @@ def main(argv: list[str] | None = None) -> int:
         if args.in_memory_test:
             logger.info("Mode: --in-memory-test (synthetic data)")
             feature_df, regime_labels = build_in_memory_data()
+        elif args.db_path is not None:
+            logger.info("Mode: --db-path (real SQLite data from {})", args.db_path)
+            feature_df, regime_labels = build_from_db(args.db_path)
         else:
             features_dir = args.features_dir or (_ROOT / "data" / "features" / "primary")
             logger.info("Mode: production (features from {})", features_dir)
@@ -486,9 +583,7 @@ def main(argv: list[str] | None = None) -> int:
     # ------------------------------------------------------------------
     # Step 2 -- Resolve walk-forward config
     # ------------------------------------------------------------------
-    from src.config import doge_settings as _ds  # noqa: PLC0415
-
-    base_wf = _ds.walk_forward
+    base_wf = _ds_global.walk_forward
     if args.in_memory_test:
         wf_cfg = WalkForwardSettings(
             training_window_days=args.wf_train_days or 15,

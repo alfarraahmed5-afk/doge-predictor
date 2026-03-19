@@ -1,0 +1,11 @@
+{
+  "C": 1.0,
+  "max_iter": 1000,
+  "seed": 42,
+  "n_train_samples": 4320,
+  "meta_feature_names": [
+    "lstm_prob",
+    "xgb_prob",
+    "regime_encoded"
+  ]
+}

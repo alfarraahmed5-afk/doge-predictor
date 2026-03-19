@@ -1,0 +1,76 @@
+# =============================================================================
+# regime_config.yaml — Market Regime Definitions and Routing
+# DogeRegimeClassifier assigns one of these labels to every candle.
+# DECOUPLED overrides all other regimes when its condition is met.
+# =============================================================================
+
+# Global regime classification thresholds
+thresholds:
+  # BTC-DOGE 24h log-return correlation below this → DECOUPLED regime
+  btc_corr_decoupled: 0.30
+
+  # Bollinger Band width thresholds
+  bb_width_low: 0.04     # BB width < 0.04 → RANGING_LOW_VOL condition
+  bb_width_high: 0.06    # BB width > 0.04 → RANGING_HIGH_VOL condition
+
+  # ATR (as % of price) thresholds
+  atr_low: 0.003         # ATR < 0.3% → RANGING_LOW_VOL condition
+  atr_high: 0.005        # ATR > 0.5% → RANGING_HIGH_VOL condition
+
+  # 7-day return thresholds for trending regime detection
+  roll7d_bull: 0.05      # +5% → TRENDING_BULL condition
+  roll7d_bear: -0.05     # -5% → TRENDING_BEAR condition
+
+# Regime definitions
+# Each regime specifies:
+#   - confidence_threshold: minimum model confidence required to emit signal
+#   - position_size_multiplier: multiplied against base_risk_pct
+#   - description: human-readable definition
+regimes:
+  TRENDING_BULL:
+    confidence_threshold: 0.62
+    position_size_multiplier: 1.0
+    description: >
+      EMA20 > EMA50 > EMA200 AND 7d return > +5%.
+      Strong uptrend; full position size permitted.
+
+  TRENDING_BEAR:
+    confidence_threshold: 0.62
+    position_size_multiplier: 1.0
+    description: >
+      EMA20 < EMA50 < EMA200 AND 7d return < -5%.
+      Strong downtrend; full position size permitted.
+
+  RANGING_HIGH_VOL:
+    confidence_threshold: 0.65
+    position_size_multiplier: 1.0
+    description: >
+      BB width > 0.04 AND ATR > 0.5% AND price between bands.
+      High volatility range; normal position size, elevated threshold.
+
+  RANGING_LOW_VOL:
+    confidence_threshold: 0.70
+    position_size_multiplier: 0.50
+    description: >
+      BB width < 0.04 AND ATR < 0.3%.
+      Low volatility compression; 50% position size, high threshold.
+
+  DECOUPLED:
+    confidence_threshold: 0.72
+    position_size_multiplier: 0.50
+    description: >
+      Rolling 24h BTC-DOGE log-return correlation < 0.30.
+      OVERRIDES all other regimes. Highest-risk state.
+      50% position size, maximum confidence threshold.
+
+# Regime precedence order (evaluated top to bottom; first match wins,
+# except DECOUPLED which is checked FIRST and overrides everything)
+precedence:
+  - DECOUPLED          # Always evaluated first
+  - TRENDING_BULL
+  - TRENDING_BEAR
+  - RANGING_HIGH_VOL
+  - RANGING_LOW_VOL    # Default fallback
+
+# Minimum candles of regime history before classification is trusted
+min_history_candles: 200

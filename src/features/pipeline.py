@@ -285,8 +285,9 @@ class FeaturePipeline:
         funding: pd.DataFrame,
         doge_4h: pd.DataFrame,
         doge_1d: pd.DataFrame,
-        regimes: pd.Series,
+        regimes: pd.Series | None = None,
         min_rows_override: int | None = None,
+        for_inference: bool = False,
     ) -> pd.DataFrame:
         """Run all 12 pipeline steps and return the validated feature matrix.
 
@@ -354,10 +355,17 @@ class FeaturePipeline:
         # ------------------------------------------------------------------
         # Step 7: merge regime labels (join on open_time index)
         # ------------------------------------------------------------------
-        regime_map: dict[int, str] = dict(zip(regimes.index, regimes.values))
-        out["regime_label"] = (
-            out["open_time"].map(regime_map).fillna("RANGING_LOW_VOL")
-        )
+        if regimes is not None:
+            regime_map: dict[int, str] = dict(zip(regimes.index, regimes.values))
+            out["regime_label"] = (
+                out["open_time"].map(regime_map).fillna("RANGING_LOW_VOL")
+            )
+        else:
+            # No precomputed labels — default to conservative fallback.
+            # Regime classification at inference (Step 3) produces the
+            # *current* regime label; the per-row column is not needed
+            # for inference feature columns beyond the one-hot encoding.
+            out["regime_label"] = "RANGING_LOW_VOL"
         logger.debug("step 7 (regime label merge) done")
 
         # ------------------------------------------------------------------
@@ -379,21 +387,45 @@ class FeaturePipeline:
         # ------------------------------------------------------------------
         # Step 9: add target column (intentional shift(-1) — target only)
         # ------------------------------------------------------------------
-        out = add_target_column(out)
-        logger.debug("step 9 (target column) done")
+        if not for_inference:
+            out = add_target_column(out)
+            logger.debug("step 9 (target column) done")
+        else:
+            logger.debug("step 9 skipped (for_inference=True — no target column needed)")
 
         # ------------------------------------------------------------------
         # Step 10: drop NaN rows (warmup + last row with NaN target)
         # ------------------------------------------------------------------
-        n_before_drop = len(out)
-        out = out.dropna()
-        n_dropped = n_before_drop - len(out)
-        logger.info(
-            "FeaturePipeline[{}]: step 10 — dropped {} warmup/target-NaN rows, {} remain",
-            self.run_id,
-            n_dropped,
-            len(out),
-        )
+        n_dropped: int = 0
+        if not for_inference:
+            n_before_drop = len(out)
+
+            # Restrict dropna to feature columns only.  Passthrough OHLCV
+            # columns like ``quote_volume`` and ``num_trades`` may be NULL in
+            # the SQLite bootstrap (Binance does not populate those fields for
+            # standard klines) and are NOT model inputs.  Dropping on ALL
+            # columns would silently eliminate every training row.
+            _drop_subset: list[str] = [
+                c for c in out.columns
+                if c not in _PASSTHROUGH_COLS
+                and pd.api.types.is_numeric_dtype(out[c])
+            ]
+            # Always include "target" in the subset so the final NaN target
+            # row is still removed (target is in _PASSTHROUGH_COLS but we
+            # need to drop the last row whose target is NaN).
+            if "target" in out.columns and "target" not in _drop_subset:
+                _drop_subset.append("target")
+
+            out = out.dropna(subset=_drop_subset)
+            n_dropped = n_before_drop - len(out)
+            logger.info(
+                "FeaturePipeline[{}]: step 10 — dropped {} warmup/target-NaN rows, {} remain",
+                self.run_id,
+                n_dropped,
+                len(out),
+            )
+        else:
+            logger.debug("step 10 skipped (for_inference=True — keeping all rows including warmup)")
 
         # ------------------------------------------------------------------
         # Determine feature columns (all numeric cols added by the pipeline)
@@ -408,32 +440,41 @@ class FeaturePipeline:
         # ------------------------------------------------------------------
         # Step 11: validate feature matrix
         # ------------------------------------------------------------------
-        validation_result = validate_feature_matrix(
-            out,
-            expected_columns=feature_cols,
-            strict=False,
-        )
-        if not validation_result["ok"]:
-            raise ValueError(
-                f"FeaturePipeline[{self.run_id}]: feature matrix validation failed "
-                f"— {validation_result}"
+        if not for_inference:
+            # Validate only feature columns — passthrough OHLCV columns such
+            # as quote_volume and num_trades may be NULL in the SQLite bootstrap
+            # (Binance does not populate them for standard klines) and are not
+            # model inputs, so NaN in those columns is expected and harmless.
+            cols_to_validate = feature_cols + (["target"] if "target" in out.columns else [])
+            validation_result = validate_feature_matrix(
+                out[cols_to_validate],
+                expected_columns=feature_cols,
+                strict=False,
             )
-        logger.debug("step 11 (validate_feature_matrix) PASS")
+            if not validation_result["ok"]:
+                raise ValueError(
+                    f"FeaturePipeline[{self.run_id}]: feature matrix validation failed "
+                    f"— {validation_result}"
+                )
+            logger.debug("step 11 (validate_feature_matrix) PASS")
+        else:
+            logger.debug("step 11 skipped (for_inference=True — engine validates last row only)")
 
         # ------------------------------------------------------------------
         # Step 12: assert minimum post-warmup row count
         # ------------------------------------------------------------------
-        min_rows = (
-            min_rows_override
-            if min_rows_override is not None
-            else self._cfg.walk_forward.min_training_rows
-        )
-        if len(out) < min_rows:
-            raise ValueError(
-                f"FeaturePipeline[{self.run_id}]: insufficient rows after warmup — "
-                f"{len(out)} < {min_rows}.  "
-                f"Pass min_rows_override for small test datasets."
+        if not for_inference:
+            min_rows = (
+                min_rows_override
+                if min_rows_override is not None
+                else self._cfg.walk_forward.min_training_rows
             )
+            if len(out) < min_rows:
+                raise ValueError(
+                    f"FeaturePipeline[{self.run_id}]: insufficient rows after warmup — "
+                    f"{len(out)} < {min_rows}.  "
+                    f"Pass min_rows_override for small test datasets."
+                )
 
         # ------------------------------------------------------------------
         # Final log

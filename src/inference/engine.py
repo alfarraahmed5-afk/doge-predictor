@@ -616,7 +616,8 @@ class InferenceEngine:
             doge_4h=doge_4h,
             doge_1d=doge_1d,
             regimes=regime_labels,
-            min_rows_override=1,  # At inference: only need 1 row minimum
+            min_rows_override=1,
+            for_inference=True,  # Skip target column + dropna; engine validates last row
         )
 
         logger.debug(
@@ -661,6 +662,11 @@ class InferenceEngine:
     def _step4_validate_features(self, feature_df: pd.DataFrame) -> None:
         """Step 4: Validate feature matrix — zero NaN/Inf, correct columns.
 
+        At inference time (for_inference=True), the feature_df still contains
+        warmup rows with NaN indicator values.  We validate only the LAST ROW
+        (the current candle) to confirm its features are all valid before
+        running the models.
+
         Args:
             feature_df: Feature DataFrame produced by Step 2.
 
@@ -668,13 +674,24 @@ class InferenceEngine:
             FeatureValidationError: If any validation check fails.
         """
         expected = self._expected_columns if self._expected_columns else None
+
+        # Validate only the last row — warmup rows legitimately have NaN.
+        # Also restrict to feature columns only: passthrough OHLCV columns
+        # (quote_volume, num_trades, etc.) may be NaN in the DB and are not
+        # features — including them would cause spurious validation failures.
+        last_row = feature_df.iloc[[-1]]
+        if expected:
+            # Keep only columns that are actual features (in the manifest)
+            cols_present = [c for c in expected if c in last_row.columns]
+            last_row = last_row[cols_present]
+
         result = validate_feature_matrix(
-            feature_df, expected_columns=expected, strict=False
+            last_row, expected_columns=expected, strict=False
         )
         if not result["ok"]:
             raise FeatureValidationError(result)
 
-        logger.debug("Step 4: feature validation OK (n_rows={})", result["n_rows"])
+        logger.debug("Step 4: feature validation OK (last row of {})", len(feature_df))
 
     def _step5_scale_features(self, feature_df: pd.DataFrame) -> np.ndarray:
         """Step 5: Apply the loaded scaler to the feature matrix.
@@ -694,7 +711,23 @@ class InferenceEngine:
             c for c in feature_df.select_dtypes(include=[np.number]).columns
             if c not in _PASSTHROUGH_COLS
         ]
-        X = feature_df[feature_cols].to_numpy(dtype=np.float64)
+
+        # Drop warmup rows that have NaN in feature columns.
+        # These rows existed only to provide rolling-window history for computing
+        # valid features for later rows (e.g. EMA200 needs 200 candles of history).
+        # The last row (current candle) was validated NaN-free in Step 4.
+        feature_matrix = feature_df[feature_cols]
+        valid_mask = ~feature_matrix.isnull().any(axis=1)
+        n_warmup = int((~valid_mask).sum())
+        if n_warmup > 0:
+            feature_matrix = feature_matrix[valid_mask]
+            logger.debug(
+                "Step 5: dropped {} warmup rows with NaN, {} valid rows remain",
+                n_warmup,
+                len(feature_matrix),
+            )
+
+        X = feature_matrix.to_numpy(dtype=np.float64)
 
         # Apply transform — never refit
         X_scaled: np.ndarray = self._scaler.transform(X)
