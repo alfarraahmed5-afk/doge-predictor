@@ -335,14 +335,18 @@ def get_status() -> dict[str, Any]:
     )
     latest = latest_rows[0] if latest_rows else None
 
-    # Price 24h ago (24 candles back on 1h)
+    # Price 24h ago (24 candles back on 1h) — use subquery for PG/SQLite compat
     prev_rows = _execute(
         """
-        SELECT close
-        FROM   ohlcv_1h
-        WHERE  symbol = 'DOGEUSDT'
-        ORDER  BY open_time DESC
-        LIMIT  1 OFFSET 24
+        SELECT close FROM ohlcv_1h
+        WHERE symbol = 'DOGEUSDT'
+          AND open_time < (
+              SELECT open_time FROM ohlcv_1h
+              WHERE symbol = 'DOGEUSDT'
+              ORDER BY open_time DESC LIMIT 1
+          ) - 86400000
+        ORDER BY open_time DESC
+        LIMIT 1
         """
     )
     prev_24h = prev_rows[0] if prev_rows else None
