@@ -6,15 +6,16 @@
 #   Stage 2 (runtime)  — slim image; copy compiled artefacts + app code
 #
 # Exposed ports:
-#   8000 — GET /health   (HealthCheckServer)
-#   8001 — GET /metrics  (Prometheus)
+#   8000 — GET /health        (HealthCheckServer)
+#   8001 — GET /metrics       (Prometheus)
+#   8080 — Trading dashboard  (FastAPI + TradingView Lightweight Charts)
 #
 # Health check:
 #   curl -f http://localhost:8000/health || exit 1
 #
 # Usage:
 #   docker build -t doge_predictor:latest .
-#   docker run -p 8000:8000 -p 8001:8001 \
+#   docker run -p 8000:8000 -p 8001:8001 -p 8080:8080 \
 #     -e BINANCE_API_KEY=... -e BINANCE_API_SECRET=... \
 #     -v $(pwd)/models:/app/models \
 #     doge_predictor:latest
@@ -104,6 +105,7 @@ RUN mkdir -p logs models data
 # ---------------------------------------------------------------------------
 EXPOSE 8000
 EXPOSE 8001
+EXPOSE 8080
 
 # ---------------------------------------------------------------------------
 # Health check (relies on curl installed above)

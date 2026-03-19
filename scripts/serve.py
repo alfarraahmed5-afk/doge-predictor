@@ -7,6 +7,7 @@ Starts the live DOGE price-prediction inference engine:
     closed candle via :meth:`~src.inference.engine.InferenceEngine.run_on_closed_kline`
   * :class:`~src.monitoring.health_check.HealthCheckServer` on ``--health-port`` (default 8000)
   * Prometheus metrics HTTP endpoint on ``--metrics-port`` (default 8001)
+  * Trading dashboard UI on ``--dashboard-port`` (default 8080) via FastAPI + uvicorn
   * APScheduler background jobs:
 
     - ``:01`` past every hour — :class:`~src.ingestion.scheduler.IncrementalScheduler`
@@ -22,9 +23,10 @@ Usage::
     python scripts/serve.py --models-dir models/  # uses TimescaleDB from settings.yaml
 
 Environment variables (override settings.yaml):
-    DOGE_DB_URL   — full SQLAlchemy database URL
-    HEALTH_PORT   — health check HTTP port
-    METRICS_PORT  — Prometheus metrics HTTP port
+    DOGE_DB_URL    — full SQLAlchemy database URL
+    HEALTH_PORT    — health check HTTP port
+    METRICS_PORT   — Prometheus metrics HTTP port
+    DASHBOARD_PORT — trading dashboard UI port
 """
 
 from __future__ import annotations
@@ -486,6 +488,17 @@ def _build_parser() -> argparse.ArgumentParser:
         default="unknown",
         help="Model version tag stored in every PredictionRecord (default: unknown)",
     )
+    parser.add_argument(
+        "--dashboard-port",
+        type=int,
+        default=int(os.environ.get("DASHBOARD_PORT", "8080")),
+        help="Port for the trading dashboard UI (default: 8080)",
+    )
+    parser.add_argument(
+        "--no-dashboard",
+        action="store_true",
+        help="Disable the trading dashboard UI server",
+    )
     return parser
 
 
@@ -559,6 +572,53 @@ def main() -> int:
             logger.info("serve: Prometheus metrics on port {}", args.metrics_port)
         except Exception as exc:
             logger.warning("serve: could not start Prometheus metrics server: {}", exc)
+
+    # ------------------------------------------------------------------
+    # Trading dashboard UI (FastAPI + uvicorn, port 8080)
+    # ------------------------------------------------------------------
+    if not args.no_dashboard:
+        try:
+            import uvicorn  # noqa: PLC0415
+            from src.dashboard.app import (  # noqa: PLC0415
+                app as _dash_app,
+                init_dashboard,
+                init_dashboard_pg,
+            )
+
+            if args.db_path:
+                init_dashboard(Path(args.db_path))
+            else:
+                # TimescaleDB mode — build connection URL from env / settings
+                _db_cfg = cfg.database
+                _pg_url = (
+                    f"postgresql+psycopg2://{_db_cfg.user}:{_db_cfg.password}"
+                    f"@{_db_cfg.host}:{_db_cfg.port}/{_db_cfg.name}"
+                )
+                init_dashboard_pg(_pg_url)
+                logger.info("serve: dashboard connected to TimescaleDB")
+
+            _dashboard_port = args.dashboard_port
+
+            def _start_dashboard() -> None:
+                uvicorn.run(
+                    _dash_app,
+                    host="0.0.0.0",
+                    port=_dashboard_port,
+                    log_level="error",
+                    access_log=False,
+                )
+
+            _dash_thread = threading.Thread(
+                target=_start_dashboard, name="dashboard", daemon=True
+            )
+            _dash_thread.start()
+            logger.info(
+                "serve: trading dashboard started at http://localhost:{}", _dashboard_port
+            )
+        except Exception as exc:
+            logger.warning(
+                "serve: dashboard could not be started (non-fatal): {}", exc
+            )
 
     # ------------------------------------------------------------------
     # Inference engine  (non-fatal if models are not yet trained)

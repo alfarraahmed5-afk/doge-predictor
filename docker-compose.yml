@@ -87,6 +87,7 @@ services:
     ports:
       - "8000:8000"   # /health endpoint
       - "8001:8001"   # Prometheus /metrics endpoint
+      - "8080:8080"   # Trading dashboard UI
     environment:
       # Database — overrides settings.yaml; connects to the timescaledb service
       DB_HOST: timescaledb
@@ -97,9 +98,10 @@ services:
       # Binance API keys (set in secrets.env)
       BINANCE_API_KEY: ${BINANCE_API_KEY:-}
       BINANCE_API_SECRET: ${BINANCE_API_SECRET:-}
-      # Health / metrics ports (match Dockerfile CMD defaults)
+      # Health / metrics / dashboard ports (match Dockerfile CMD defaults)
       HEALTH_PORT: "8000"
       METRICS_PORT: "8001"
+      DASHBOARD_PORT: "8080"
       # Shadow mode — set to "true" to log predictions without emitting signals
       SHADOW_MODE: ${SHADOW_MODE:-false}
       # Python
