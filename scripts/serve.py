@@ -585,36 +585,57 @@ def main() -> int:
             # all routes registered, avoiding sys.modules cache collisions
             # that occur when the main serve.py process has already imported
             # heavy packages (torch, xgboost, etc.) that share import locks.
+            #
+            # SECURITY: db_path / DB credentials are passed via environment
+            # variables — never interpolated into executable code strings.
+            # Interpolating user-supplied paths into a -c code string would
+            # allow shell/code injection if the path contained quotes or
+            # newlines.
             _dashboard_port = args.dashboard_port
-            _dash_cmd = [
-                sys.executable,
-                "-c",
-                (
-                    "import sys, asyncio\n"
-                    "sys.path.insert(0, '.')\n"
-                    "from pathlib import Path\n"
-                    "from src.dashboard.app import app, init_dashboard, init_dashboard_pg\n"
-                    + (
-                        f"init_dashboard(Path(r'{args.db_path}'))\n"
-                        if args.db_path
-                        else (
-                            "from src.config import get_settings\n"
-                            "cfg=get_settings()\n"
-                            "db=cfg.database\n"
-                            "init_dashboard_pg(f'postgresql+psycopg2://{db.user}:{db.password}@{db.host}:{db.port}/{db.name}')\n"
-                        )
+
+            # Build the child environment: inherit current env, then inject
+            # only the values the dashboard subprocess needs.
+            _dash_env = os.environ.copy()
+            if args.db_path:
+                _dash_env["DASHBOARD_DB_PATH"] = str(args.db_path)
+            else:
+                try:
+                    _cfg = get_settings()
+                    _db = _cfg.database
+                    _pg_url = (
+                        f"postgresql+psycopg2://{_db.user}:{_db.password}"
+                        f"@{_db.host}:{_db.port}/{_db.name}"
                     )
-                    + f"from uvicorn import Config, Server\n"
-                    f"config=Config(app=app,host='0.0.0.0',port={_dashboard_port},log_level='error',access_log=False)\n"
-                    f"loop=asyncio.new_event_loop()\n"
-                    f"asyncio.set_event_loop(loop)\n"
-                    f"loop.run_until_complete(Server(config=config).serve())\n"
-                ),
-            ]
+                    _dash_env["DASHBOARD_PG_URL"] = _pg_url
+                except Exception as _cfg_exc:
+                    logger.warning(
+                        "serve: could not build dashboard PG URL: {}", _cfg_exc
+                    )
+
+            _dash_code = (
+                "import sys, asyncio, os\n"
+                "sys.path.insert(0, '.')\n"
+                "from pathlib import Path\n"
+                "from src.dashboard.app import app, init_dashboard, init_dashboard_pg\n"
+                # Read paths/URLs from environment — no interpolation from parent
+                "_db_path = os.environ.get('DASHBOARD_DB_PATH')\n"
+                "_pg_url  = os.environ.get('DASHBOARD_PG_URL')\n"
+                "if _db_path:\n"
+                "    init_dashboard(Path(_db_path))\n"
+                "elif _pg_url:\n"
+                "    init_dashboard_pg(_pg_url)\n"
+                f"from uvicorn import Config, Server\n"
+                f"config=Config(app=app,host='0.0.0.0',port={_dashboard_port},log_level='error',access_log=False)\n"
+                f"loop=asyncio.new_event_loop()\n"
+                f"asyncio.set_event_loop(loop)\n"
+                f"loop.run_until_complete(Server(config=config).serve())\n"
+            )
+            _dash_cmd = [sys.executable, "-c", _dash_code]
             _dash_proc = subprocess.Popen(
                 _dash_cmd,
                 stdout=subprocess.DEVNULL,
                 stderr=subprocess.DEVNULL,
+                env=_dash_env,
             )
             logger.info(
                 "serve: trading dashboard started at http://localhost:{} (pid {})",

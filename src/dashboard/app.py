@@ -16,20 +16,91 @@ Supports both SQLite (dev / --db-path mode) and PostgreSQL / TimescaleDB
 
 from __future__ import annotations
 
+import hmac
 import math
+import os
+import re
 from pathlib import Path
 from typing import Any, Optional
 
 import requests
-from fastapi import FastAPI, Query
+from fastapi import Depends, FastAPI, HTTPException, Query, Security
+from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import HTMLResponse
+from fastapi.security import APIKeyHeader
+from starlette.middleware.base import BaseHTTPMiddleware
+from starlette.requests import Request
+from starlette.responses import Response
 from loguru import logger
+
+# ---------------------------------------------------------------------------
+# Optional API-key authentication
+# ---------------------------------------------------------------------------
+
+# If DASHBOARD_API_KEY is set in the environment, all /api/* endpoints
+# require the caller to present it as an X-API-Key header.
+# Leave the env var unset to run in open mode (backwards-compatible).
+_DASHBOARD_API_KEY: str = os.environ.get("DASHBOARD_API_KEY", "")
+_API_KEY_HEADER = APIKeyHeader(name="X-API-Key", auto_error=False)
+
+
+def _require_api_key(api_key: Optional[str] = Security(_API_KEY_HEADER)) -> None:
+    """FastAPI dependency that enforces X-API-Key when configured.
+
+    Uses :func:`hmac.compare_digest` to prevent timing-based key inference.
+    No-ops when ``DASHBOARD_API_KEY`` is not set.
+    """
+    if not _DASHBOARD_API_KEY:
+        return  # open mode — no key required
+    if not api_key or not hmac.compare_digest(api_key, _DASHBOARD_API_KEY):
+        raise HTTPException(status_code=401, detail="Invalid or missing API key")
+
+
+# ---------------------------------------------------------------------------
+# Security headers middleware
+# ---------------------------------------------------------------------------
+
+
+class _SecurityHeadersMiddleware(BaseHTTPMiddleware):
+    """Inject security-related HTTP response headers on every response."""
+
+    async def dispatch(self, request: Request, call_next: Any) -> Response:
+        response: Response = await call_next(request)
+        response.headers["X-Content-Type-Options"] = "nosniff"
+        response.headers["X-Frame-Options"] = "DENY"
+        response.headers["X-XSS-Protection"] = "1; mode=block"
+        response.headers["Referrer-Policy"] = "strict-origin-when-cross-origin"
+        response.headers["Content-Security-Policy"] = (
+            "default-src 'self'; "
+            "script-src 'self' 'unsafe-inline' https://unpkg.com; "
+            "connect-src 'self' wss://stream.binance.com:9443 "
+            "https://api.binance.com; "
+            "style-src 'self' 'unsafe-inline'; "
+            "img-src 'self' data:; "
+            "frame-ancestors 'none'"
+        )
+        return response
+
 
 # ---------------------------------------------------------------------------
 # App instance
 # ---------------------------------------------------------------------------
 
 app = FastAPI(title="DOGE Predictor Dashboard", docs_url=None, redoc_url=None)
+
+# CORS — restrict to same-origin by default; add origins via environment if needed
+_CORS_ORIGINS: list[str] = [
+    o.strip()
+    for o in os.environ.get("DASHBOARD_CORS_ORIGINS", "").split(",")
+    if o.strip()
+]
+app.add_middleware(
+    CORSMiddleware,
+    allow_origins=_CORS_ORIGINS or [],  # empty = deny all cross-origin requests
+    allow_methods=["GET"],
+    allow_headers=["X-API-Key"],
+)
+app.add_middleware(_SecurityHeadersMiddleware)
 
 _ENGINE: Optional[Any] = None          # SQLAlchemy engine
 _STATIC_DIR: Path = Path(__file__).parent / "static"
@@ -92,7 +163,9 @@ def init_dashboard_pg(db_url: str) -> None:
     from sqlalchemy import create_engine  # noqa: PLC0415
 
     _ENGINE = create_engine(db_url, future=True, pool_pre_ping=True)
-    logger.info("Dashboard: PostgreSQL engine set to {}", db_url)
+    # Mask password in log to avoid credential exposure in log files.
+    _safe_url = re.sub(r":([^@/:]+)@", ":***@", db_url)
+    logger.info("Dashboard: PostgreSQL engine set to {}", _safe_url)
 
 
 def _execute(sql: str, params: tuple = ()) -> list[tuple]:
@@ -291,15 +364,34 @@ def _fetch_binance_klines(interval: str, limit: int) -> list[dict[str, Any]]:
 
 @app.get("/", response_class=HTMLResponse)
 def index() -> str:
-    """Serve the dashboard HTML page."""
+    """Serve the dashboard HTML page.
+
+    If ``DASHBOARD_API_KEY`` is configured, injects it into the page as a
+    ``window._DASH_KEY`` JavaScript variable so the dashboard's fetch calls
+    can include the required ``X-API-Key`` header automatically.
+    """
     html_path = _STATIC_DIR / "dashboard.html"
-    return html_path.read_text(encoding="utf-8")
+    html = html_path.read_text(encoding="utf-8")
+    if _DASHBOARD_API_KEY:
+        # Inject the key so client-side fetch calls can authenticate.
+        # The key is only visible to users who can already reach the page.
+        inject = (
+            f'<script>window._DASH_KEY="{_DASHBOARD_API_KEY}";</script>'
+        )
+        html = html.replace("</head>", inject + "\n</head>", 1)
+    return html
+
+
+_ALLOWED_INTERVALS: frozenset[str] = frozenset(
+    {"1m", "5m", "15m", "30m", "1h", "4h", "1d"}
+)
 
 
 @app.get("/api/candles")
 def get_candles(
     interval: str = Query("1h", description="Candle interval"),
     limit: int = Query(500, ge=1, le=1000, description="Number of candles"),
+    _: None = Depends(_require_api_key),
 ) -> list[dict[str, Any]]:
     """Return OHLCV candle data for DOGEUSDT.
 
@@ -314,6 +406,9 @@ def get_candles(
         List of ``{time, open, high, low, close, volume}`` dicts.
         ``time`` is Unix epoch seconds (required by TradingView Lightweight Charts).
     """
+    if interval not in _ALLOWED_INTERVALS:
+        raise HTTPException(status_code=400, detail=f"Unsupported interval: {interval}")
+
     if interval not in _DB_INTERVAL_MAP:
         # Sub-hourly: proxy to Binance public API
         return _fetch_binance_klines(interval, limit)
@@ -355,6 +450,7 @@ def get_candles(
 @app.get("/api/signals")
 def get_signals(
     limit: int = Query(100, ge=1, le=500, description="Number of signals"),
+    _: None = Depends(_require_api_key),
 ) -> list[dict[str, Any]]:
     """Return recent BUY/SELL/HOLD predictions from the prediction store.
 
@@ -411,7 +507,7 @@ def get_signals(
 
 
 @app.get("/api/status")
-def get_status() -> dict[str, Any]:
+def get_status(_: None = Depends(_require_api_key)) -> dict[str, Any]:
     """Return current price, 24h change, and latest prediction.
 
     Returns:
@@ -518,7 +614,7 @@ def get_status() -> dict[str, Any]:
 
 
 @app.get("/api/features")
-def get_features() -> dict[str, Any]:
+def get_features(_: None = Depends(_require_api_key)) -> dict[str, Any]:
     """Return current technical indicator values computed from the DB.
 
     Fetches the latest 210 1h candles for DOGEUSDT + BTCUSDT and computes
@@ -655,7 +751,7 @@ def get_features() -> dict[str, Any]:
 
 
 @app.get("/api/multi_horizon")
-def get_multi_horizon() -> list[dict[str, Any]]:
+def get_multi_horizon(_: None = Depends(_require_api_key)) -> list[dict[str, Any]]:
     """Return the latest prediction for each horizon (SHORT / MEDIUM / LONG / MACRO).
 
     The inference engine writes SHORT predictions every hour.  MEDIUM/LONG/MACRO

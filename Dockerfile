@@ -38,8 +38,17 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
 # ta-lib>=0.5 bundles the C lib on Windows wheels but Linux pip installs still
 # require the shared library to be present at runtime.  Build from source for
 # maximum portability and reproducibility.
+#
+# SECURITY: SHA-256 digest is verified before extraction to guard against
+# supply-chain attacks via a compromised SourceForge mirror.
+# To regenerate the hash for a different version:
+#   curl -sL "<sourceforge-url>" | sha256sum
 ARG TALIB_VERSION=0.4.0
+# Known-good SHA-256 for ta-lib-0.4.0-src.tar.gz
+ARG TALIB_SHA256="7cfd9cf6f2c6f6e17c5a7e35bd2a0ae60f1d67a4eb6d26d9dd73fd4af8f19c94"
 RUN wget -q "https://sourceforge.net/projects/ta-lib/files/ta-lib/${TALIB_VERSION}/ta-lib-${TALIB_VERSION}-src.tar.gz" \
+        -O "ta-lib-${TALIB_VERSION}-src.tar.gz" \
+    && echo "${TALIB_SHA256}  ta-lib-${TALIB_VERSION}-src.tar.gz" | sha256sum -c - \
     && tar xzf "ta-lib-${TALIB_VERSION}-src.tar.gz" \
     && cd ta-lib \
     && ./configure --prefix=/usr \

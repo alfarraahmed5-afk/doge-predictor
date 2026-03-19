@@ -52,12 +52,14 @@ services:
     restart: unless-stopped
     networks:
       - doge_net
-    ports:
-      - "5432:5432"
+    # Port 5432 is NOT published to the host — only reachable within doge_net.
+    # To access via psql: docker exec -it doge_timescaledb psql -U doge_user -d doge_predictor
     environment:
       POSTGRES_DB: doge_predictor
       POSTGRES_USER: doge_user
-      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:-doge_password_change_me}
+      # POSTGRES_PASSWORD must be set explicitly — no insecure default.
+      # Export it before running: export POSTGRES_PASSWORD=<strong-password>
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:?POSTGRES_PASSWORD must be set (export POSTGRES_PASSWORD=<strong-password>)}
       TIMESCALEDB_TELEMETRY: "off"
     volumes:
       - timescaledb_data:/var/lib/postgresql/data
@@ -94,7 +96,7 @@ services:
       DB_PORT: "5432"
       DB_NAME: doge_predictor
       DB_USER: doge_user
-      DB_PASSWORD: ${POSTGRES_PASSWORD:-doge_password_change_me}
+      DB_PASSWORD: ${POSTGRES_PASSWORD:?POSTGRES_PASSWORD must be set}
       # Binance API keys (set in secrets.env)
       BINANCE_API_KEY: ${BINANCE_API_KEY:-}
       BINANCE_API_SECRET: ${BINANCE_API_SECRET:-}
@@ -170,7 +172,8 @@ services:
       - "3000:3000"
     environment:
       GF_SECURITY_ADMIN_USER: admin
-      GF_SECURITY_ADMIN_PASSWORD: ${GRAFANA_PASSWORD:-grafana_password_change_me}
+      # GRAFANA_PASSWORD must be set explicitly — no insecure default.
+      GF_SECURITY_ADMIN_PASSWORD: ${GRAFANA_PASSWORD:?GRAFANA_PASSWORD must be set (export GRAFANA_PASSWORD=<strong-password>)}
       GF_USERS_ALLOW_SIGN_UP: "false"
       GF_ANALYTICS_REPORTING_ENABLED: "false"
       # Auto-provision Prometheus as a data source

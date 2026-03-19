@@ -1,0 +1,47 @@
+# =============================================================================
+# .dockerignore — files excluded from the Docker build context
+# =============================================================================
+
+# ── Secrets — NEVER bundle credentials into images ───────────────────────────
+config/secrets.env
+*.env
+.env*
+
+# ── Development artefacts ─────────────────────────────────────────────────────
+.venv/
+__pycache__/
+*.pyc
+*.pyo
+*.pyd
+.pytest_cache/
+.mypy_cache/
+.ruff_cache/
+*.egg-info/
+dist/
+build/
+
+# ── Data (large, not needed in image) ────────────────────────────────────────
+data/raw/
+data/processed/
+data/features/
+data/checkpoints/
+mlruns/
+
+# ── Git ───────────────────────────────────────────────────────────────────────
+.git/
+.gitignore
+
+# ── Notebooks (scratch only) ──────────────────────────────────────────────────
+notebooks/
+
+# ── Local log files ──────────────────────────────────────────────────────────
+logs/
+*.log
+
+# ── Editor / OS artefacts ────────────────────────────────────────────────────
+.DS_Store
+Thumbs.db
+*.swp
+*.swo
+.idea/
+.vscode/

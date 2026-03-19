@@ -4,7 +4,14 @@
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1.0">
 <title>DOGE Predictor — Trading Dashboard</title>
-<script src="https://unpkg.com/lightweight-charts@4.1.3/dist/lightweight-charts.standalone.production.js"></script>
+<!--
+  SRI NOTE: add an integrity="sha384-<hash>" attribute after computing:
+    curl -sL https://unpkg.com/lightweight-charts@4.1.3/dist/lightweight-charts.standalone.production.js \
+      | openssl dgst -sha384 -binary | openssl base64 -A
+  then set: integrity="sha384-<output>" crossorigin="anonymous"
+-->
+<script src="https://unpkg.com/lightweight-charts@4.1.3/dist/lightweight-charts.standalone.production.js"
+        crossorigin="anonymous"></script>
 <style>
 *,*::before,*::after{box-sizing:border-box;margin:0;padding:0}
 :root{
@@ -348,6 +355,21 @@ const POLL_STATUS_MS   = 5_000;
 const POLL_FEATURES_MS = 15_000;
 const POLL_HZ_MS       = 8_000;
 
+// Auth header injected by server when DASHBOARD_API_KEY is set.
+const _FETCH_OPTS = (typeof window._DASH_KEY === 'string' && window._DASH_KEY)
+  ? { headers: { 'X-API-Key': window._DASH_KEY } }
+  : {};
+
+// HTML escape helper — prevents XSS when rendering server-supplied strings.
+function _esc(s) {
+  return String(s)
+    .replace(/&/g, '&amp;')
+    .replace(/</g, '&lt;')
+    .replace(/>/g, '&gt;')
+    .replace(/"/g, '&quot;')
+    .replace(/'/g, '&#39;');
+}
+
 // ─── Chart init ──────────────────────────────────────────────────────────────
 function initChart() {
   const el = document.getElementById('chart');
@@ -451,7 +473,7 @@ function flashPrice(price) {
 async function fetchCandles() {
   try {
     const limit = currentTF==='1d' ? 365 : 500;
-    const res = await fetch(`/api/candles?interval=${currentTF}&limit=${limit}`);
+    const res = await fetch(`/api/candles?interval=${currentTF}&limit=${limit}`, _FETCH_OPTS);
     if (!res.ok) return;
     const candles = await res.json();
     if (!candles || !candles.length) return;
@@ -465,7 +487,7 @@ async function fetchCandles() {
 
 async function fetchSignals() {
   try {
-    const res = await fetch('/api/signals?limit=100');
+    const res = await fetch('/api/signals?limit=100', _FETCH_OPTS);
     if (!res.ok) return;
     lastSignals = await res.json();
     renderSidebarSignals(lastSignals);
@@ -475,7 +497,7 @@ async function fetchSignals() {
 
 async function fetchStatus() {
   try {
-    const res = await fetch('/api/status');
+    const res = await fetch('/api/status', _FETCH_OPTS);
     if (!res.ok) return;
     const st = await res.json();
     latestPred = st.prediction;
@@ -496,7 +518,7 @@ async function fetchStatus() {
 
 async function fetchFeatures() {
   try {
-    const res = await fetch('/api/features');
+    const res = await fetch('/api/features', _FETCH_OPTS);
     if (!res.ok) return;
     latestFeat = await res.json();
     renderIndicators(latestFeat);
@@ -506,7 +528,7 @@ async function fetchFeatures() {
 
 async function fetchMultiHorizon() {
   try {
-    const res = await fetch('/api/multi_horizon');
+    const res = await fetch('/api/multi_horizon', _FETCH_OPTS);
     if (!res.ok) return;
     latestHz = await res.json();
     renderHorizonTable(latestHz);
@@ -641,13 +663,15 @@ function renderHorizonTable(hz) {
 
   const WINDOW_LABELS = {SHORT:'Next 4h', MEDIUM:'Next 24h', LONG:'Next 7d', MACRO:'Next 30d'};
   tbody.innerHTML = rows.map(r => {
-    const sig     = r.signal || 'HOLD';
+    // Escape all server-supplied string values before interpolating into HTML.
+    const sig     = _esc(r.signal || 'HOLD');
     const prob_up = (r.prob_up || 0.5) * 100;
     const thr     = (r.threshold || 0.65) * 100;
-    const wLabel  = WINDOW_LABELS[r.horizon] || r.horizon;
+    // WINDOW_LABELS keys are client-side constants; _esc as belt-and-braces.
+    const wLabel  = _esc(WINDOW_LABELS[r.horizon] || r.horizon);
     const barColor= prob_up>thr?'var(--green)':prob_up<(100-thr)?'var(--red)':'var(--text3)';
     const resultIcon = r.correct===null||r.correct===undefined?'':r.correct?
-      '<span style="color:var(--green)">✓</span>':'<span style="color:var(--red)">✗</span>';
+      '<span style="color:var(--green)">&#x2713;</span>':'<span style="color:var(--red)">&#x2717;</span>';
     return `<tr>
       <td style="font-size:11px;font-weight:600;color:var(--text1)">${wLabel}</td>
       <td><span class="hz-sig ${sig}">${sig}</span></td>
@@ -814,13 +838,16 @@ function renderSidebarSignals(signals) {
   }
   listEl.innerHTML = signals.slice(0,15).map(s => {
     const dt    = new Date(s.time * 1000);
-    const dStr  = dt.toLocaleDateString('en',{month:'short',day:'numeric'});
-    const tStr  = dt.toLocaleTimeString('en',{hour:'2-digit',minute:'2-digit',hour12:false});
+    // toLocaleDateString/toLocaleTimeString produce safe locale strings.
+    const dStr  = _esc(dt.toLocaleDateString('en',{month:'short',day:'numeric'}));
+    const tStr  = _esc(dt.toLocaleTimeString('en',{hour:'2-digit',minute:'2-digit',hour12:false}));
     const conf  = Math.round(s.confidence * 100);
+    // Escape server-supplied signal string (BUY / SELL / HOLD expected, but sanitise defensively).
+    const sig   = _esc(s.signal);
     const ri    = s.correct===null?'':s.correct?
-      '<span style="color:var(--green)">✓</span>':'<span style="color:var(--red)">✗</span>';
+      '<span style="color:var(--green)">&#x2713;</span>':'<span style="color:var(--red)">&#x2717;</span>';
     return `<div class="sig-item">
-      <span class="sbadge ${s.signal}">${s.signal}</span>
+      <span class="sbadge ${sig}">${sig}</span>
       <span class="stime">${dStr} ${tStr}</span>
       <span class="sconf">${conf}%</span>
       ${ri}
@@ -863,10 +890,16 @@ setInterval(fetchMultiHorizon,  POLL_HZ_MS);
   const ws = new WebSocket('wss://stream.binance.com:9443/ws/dogeusdt@aggTrade');
   ws.onmessage = ev => {
     const d = JSON.parse(ev.data);
-    const price = +d.p, side = d.m ? '▼' : '▲';
+    // price is parsed as a number; side is a hardcoded literal — no injection risk,
+    // but use textContent + style to eliminate innerHTML entirely.
+    const price = +d.p, side = d.m ? '\u25bc' : '\u25b2';
     const color = d.m ? 'var(--red)' : 'var(--green)';
-    document.getElementById('lastTrade').innerHTML =
-      `<span style="color:${color}">${side} $${price.toFixed(5)}</span>`;
+    const el = document.getElementById('lastTrade');
+    el.textContent = '';
+    const span = document.createElement('span');
+    span.style.color = color;
+    span.textContent = `${side} $${price.toFixed(5)}`;
+    el.appendChild(span);
   };
 })();
 </script>
